@@ -39,12 +39,43 @@ import sys
 import threading
 import time
 
+import glob
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Device auto-detection
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _find_drm_card(driver=None):
+    """Return the first /dev/dri/cardN, optionally matching a driver name."""
+    for card in sorted(glob.glob("/dev/dri/card[0-9]*")):
+        if not os.path.exists(card):
+            continue
+        if driver is None:
+            return card
+        idx = card.replace("/dev/dri/card", "")
+        try:
+            drv = os.path.basename(os.readlink(f"/sys/class/drm/card{idx}/device/driver"))
+            if driver in drv:
+                return card
+        except OSError:
+            pass
+    return "/dev/dri/card0"
+
+def _find_render_node(card_path):
+    """Return the render node that pairs with the given card path."""
+    try:
+        idx = int(card_path.replace("/dev/dri/card", ""))
+        render = f"/dev/dri/renderD{128 + idx}"
+        return render if os.path.exists(render) else "/dev/dri/renderD128"
+    except ValueError:
+        return "/dev/dri/renderD128"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────────────────────
 
-DRM_DEV_DEFAULT    = "/dev/dri/card0"
-RENDER_DEV_DEFAULT = "/dev/dri/renderD128"
+DRM_DEV_DEFAULT    = _find_drm_card("amdgpu")
+RENDER_DEV_DEFAULT = _find_render_node(DRM_DEV_DEFAULT)
 BPFTRACE_BIN       = "bpftrace"
 PROBE_TIMEOUT      = 10  # seconds per step
 
