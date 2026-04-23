@@ -1,0 +1,7 @@
+id: kprovider/example-job
+category_id: com.canonical.plainbox::uncategorised
+plugin: shell
+estimated_duration: 1.0
+command:
+ echo "Hello from kprovider"
+_summary: Example job

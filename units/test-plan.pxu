@@ -1,0 +1,26 @@
+unit: test plan
+id: kprovider-full
+_name: kprovider Full Test Plan
+_description: All jobs from the kprovider
+include:
+ kprovider/example-job
+ kprovider/drm/core
+ kprovider/drm/i915
+ kprovider/drm/amd
+ kprovider/drm/nouveau
+ kprovider/drm/xe
+ kprovider/drm/bridge
+ kprovider/drm/arm
+
+unit: test plan
+id: kprovider-drm
+_name: kprovider DRM GPU Drivers
+_description: DRM subsystem bpftrace workflow tests (core + all GPU drivers)
+include:
+ kprovider/drm/core
+ kprovider/drm/i915
+ kprovider/drm/amd
+ kprovider/drm/nouveau
+ kprovider/drm/xe
+ kprovider/drm/bridge
+ kprovider/drm/arm

@@ -1,0 +1,21 @@
+Source: checkbox-provider-kprovider
+Section: utils
+Priority: optional
+Maintainer: Checkbox Contributors <checkbox@canonical.com>
+Build-Depends: debhelper (>= 9),
+               intltool,
+               python3,
+               python3-checkbox-ng,
+               checkbox-provider-base,
+               checkbox-provider-resource
+
+Package: checkbox-provider-kprovider
+Architecture: all
+Depends: ${plainbox:Depends},
+         ${misc:Depends},
+         checkbox-provider-base
+Recommends: ${plainbox:Recommends}
+Suggests: ${plainbox:Suggests}
+X-Plainbox-Provider: yes
+Description: kprovider Checkbox provider template
+ This provider serves as a starting point for new Checkbox providers.
