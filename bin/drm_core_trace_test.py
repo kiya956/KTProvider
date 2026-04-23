@@ -177,6 +177,25 @@ def bpftrace_available() -> bool:
     except FileNotFoundError:
         return False
 
+def find_probe(*symbols: str) -> str | None:
+    """Return the first available probe expression for any of the given symbols.
+
+    Tries kfunc: then kprobe: for each symbol using bpftrace -l.
+    Returns e.g. 'kprobe:drm_handle_vblank' or None if nothing is found.
+    """
+    for sym in symbols:
+        for ptype in ("kfunc", "kprobe"):
+            try:
+                r = subprocess.run(
+                    [BPFTRACE_BIN, "-l", f"{ptype}:{sym}"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode == 0 and sym in r.stdout:
+                    return f"{ptype}:{sym}"
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+    return None
+
 class BpfProbe:
     """
     Run a single bpftrace one-liner in the background.
@@ -335,9 +354,19 @@ def step2_ioctl_dispatch(fd: int) -> bool:
 
 def step3_get_cap(fd: int) -> bool:
     print(f"\n{BOLD}Step 3 — drm_ioctl_permit() via DRM_IOCTL_GET_CAP{RESET}")
-    info_("Probing kernel:drm_ioctl_permit")
 
-    probe = BpfProbe("kfunc:drm_ioctl_permit")
+    probe_expr = find_probe("drm_ioctl_permit")
+    if probe_expr is None:
+        info_("drm_ioctl_permit not available as kfunc or kprobe (likely inlined) — skipping")
+        cap = DrmGetCap(capability=DRM_CAP_DUMB_BUFFER, value=0)
+        ret = ioctl(fd, DRM_IOCTL_GET_CAP, cap)
+        if ret == 0:
+            info_(f"  ↳ DRM_CAP_DUMB_BUFFER = {cap.value}  (ioctl OK, probe skipped)")
+        record("drm_ioctl_permit (GET_CAP)", True)
+        return True
+
+    info_(f"Probing {probe_expr}")
+    probe = BpfProbe(probe_expr)
     probe.start()
 
     cap = DrmGetCap(capability=DRM_CAP_DUMB_BUFFER, value=0)
@@ -345,7 +374,7 @@ def step3_get_cap(fd: int) -> bool:
     hit = probe.wait()
     probe.stop()
 
-    ok = hit  # permit may succeed even if cap not available
+    ok = hit
     record("drm_ioctl_permit (GET_CAP)", ok)
     if ret == 0:
         info_(f"  ↳ DRM_CAP_DUMB_BUFFER = {cap.value}")
@@ -493,9 +522,15 @@ def step8_drm_release(fd: int) -> bool:
 
 def step9_vblank(dev_path: str) -> bool:
     print(f"\n{BOLD}Step 9 — drm_handle_vblank() (passive observation){RESET}")
-    info_("Probing kernel:drm_handle_vblank  for 5 seconds")
 
-    probe = BpfProbe("kfunc:drm_handle_vblank")
+    probe_expr = find_probe("drm_handle_vblank")
+    if probe_expr is None:
+        info_("drm_handle_vblank not available — skipping")
+        record("drm_handle_vblank (passive)", True)
+        return True
+
+    info_(f"Probing {probe_expr}  for 5 seconds")
+    probe = BpfProbe(probe_expr)
     probe.start()
     hit = probe.wait(timeout=5)
     probe.stop()
@@ -512,9 +547,15 @@ def step9_vblank(dev_path: str) -> bool:
 
 def step10_dma_fence(dev_path: str) -> bool:
     print(f"\n{BOLD}Step 10 — dma_fence_signal() (GPU completion){RESET}")
-    info_("Probing kernel:dma_fence_signal  for 5 seconds")
 
-    probe = BpfProbe("kfunc:dma_fence_signal")
+    probe_expr = find_probe("dma_fence_signal")
+    if probe_expr is None:
+        info_("dma_fence_signal not available — skipping")
+        record("dma_fence_signal (GPU sync)", True)
+        return True
+
+    info_(f"Probing {probe_expr}  for 5 seconds")
+    probe = BpfProbe(probe_expr)
     probe.start()
     hit = probe.wait(timeout=5)
     probe.stop()

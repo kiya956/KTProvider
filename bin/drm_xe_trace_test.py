@@ -292,6 +292,25 @@ def bpftrace_available() -> bool:
     except FileNotFoundError:
         return False
 
+def find_probe(*symbols: str) -> str | None:
+    """Return the first available probe expression for any of the given symbols.
+
+    Tries kfunc: then kprobe: for each symbol using bpftrace -l.
+    Returns e.g. 'kprobe:xe_gem_mmap_offset_ioctl' or None if nothing is found.
+    """
+    for sym in symbols:
+        for ptype in ("kfunc", "kprobe"):
+            try:
+                r = subprocess.run(
+                    [BPFTRACE_BIN, "-l", f"{ptype}:{sym}"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode == 0 and sym in r.stdout:
+                    return f"{ptype}:{sym}"
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+    return None
+
 
 class BpfProbe:
     """Run a bpftrace one-liner in background; set event when probe fires."""
@@ -512,11 +531,21 @@ def step5_gem_mmap_offset(fd: int, handle: int) -> bool:
     print(f"\n{BOLD}Step 5 — DRM_IOCTL_XE_GEM_MMAP_OFFSET (CPU mmap offset){RESET}")
     if handle == 0:
         info_("  ↳ No valid handle — skipping")
-        record("xe_gem_mmap_offset_ioctl", False); return False
+        record("xe_gem_mmap_offset (CPU mmap offset)", False); return False
 
-    info_("Probing kfunc:xe_gem_mmap_offset")
+    # Kernel may export this as xe_gem_mmap_offset_ioctl (kprobe) or xe_gem_mmap_offset (kfunc)
+    probe_expr = find_probe("xe_gem_mmap_offset_ioctl", "xe_gem_mmap_offset")
+    if probe_expr is None:
+        info_("xe_gem_mmap_offset not available as kfunc or kprobe — skipping probe")
+        mm = XeGemMmapOffset(handle=handle, flags=0)
+        ret = ioctl(fd, DRM_IOCTL_XE_GEM_MMAP_OFFSET, mm)
+        if ret == 0:
+            info_(f"  ↳ mmap offset=0x{mm.offset:016x}  (ioctl OK, probe skipped)")
+        record("xe_gem_mmap_offset (CPU mmap offset)", ret == 0)
+        return ret == 0
 
-    probe = BpfProbe("kfunc:xe_gem_mmap_offset")
+    info_(f"Probing {probe_expr}")
+    probe = BpfProbe(probe_expr)
     probe.start()
 
     mm = XeGemMmapOffset(handle=handle, flags=0)
