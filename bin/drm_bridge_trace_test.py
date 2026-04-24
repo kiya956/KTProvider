@@ -19,50 +19,68 @@ Steps verified:
 import subprocess
 import sys
 import time
-import re
 import os
+import glob
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 SKIP = "\033[33mSKIP\033[0m"
 
-BPFTRACE_SCRIPT = r"""
-interval:s:1 { printf("TICK\n"); }
+BPFTRACE_BIN = "bpftrace"
 
-kprobe:drm_bridge_add         { printf("HIT drm_bridge_add ptr=%lx\n",         arg0); }
-kprobe:drm_bridge_remove      { printf("HIT drm_bridge_remove ptr=%lx\n",      arg0); }
-kprobe:drm_bridge_attach      { printf("HIT drm_bridge_attach enc=%lx bridge=%lx\n", arg0, arg1); }
-kprobe:drm_bridge_detach      { printf("HIT drm_bridge_detach ptr=%lx\n",      arg0); }
-kprobe:drm_bridge_chain_mode_set {
-    printf("HIT drm_bridge_chain_mode_set bridge=%lx\n", arg0);
-}
-kprobe:drm_atomic_bridge_chain_pre_enable {
-    printf("HIT drm_atomic_bridge_chain_pre_enable bridge=%lx\n", arg0);
-}
-kprobe:drm_atomic_bridge_chain_enable {
-    printf("HIT drm_atomic_bridge_chain_enable bridge=%lx\n", arg0);
-}
-kprobe:drm_atomic_bridge_chain_disable {
-    printf("HIT drm_atomic_bridge_chain_disable bridge=%lx\n", arg0);
-}
-kprobe:drm_atomic_bridge_chain_post_disable {
-    printf("HIT drm_atomic_bridge_chain_post_disable bridge=%lx\n", arg0);
-}
-kprobe:drm_bridge_hpd_notify  { printf("HIT drm_bridge_hpd_notify bridge=%lx status=%d\n", arg0, arg1); }
-"""
-
-STEPS = [
-    ("drm_bridge_add",                          "Step 1: bridge_add – bridge registered into global list"),
-    ("drm_bridge_attach",                       "Step 2: bridge_attach – bridge linked to encoder chain"),
-    ("drm_bridge_chain_mode_set",               "Step 3: chain_mode_set – timing mode propagated"),
-    ("drm_atomic_bridge_chain_pre_enable",      "Step 4: chain_pre_enable – forward pre-enable pass"),
-    ("drm_atomic_bridge_chain_enable",          "Step 5: chain_enable – forward enable pass"),
-    ("drm_atomic_bridge_chain_disable",         "Step 6: chain_disable – reverse disable pass"),
-    ("drm_atomic_bridge_chain_post_disable",    "Step 7: chain_post_disable – post-disable pass"),
-    ("drm_bridge_hpd_notify",                   "Step 8: hpd_notify – HPD event propagated"),
-    ("drm_bridge_detach",                       "Step 9: bridge_detach – bridge removed from chain"),
-    ("drm_bridge_remove",                       "Step 10: bridge_remove – bridge removed from global list"),
+PROBE_DEFS = [
+    ("drm_bridge_add",                       "Step 1:  bridge_add – bridge registered into global list"),
+    ("drm_bridge_attach",                    "Step 2:  bridge_attach – bridge linked to encoder chain"),
+    ("drm_bridge_chain_mode_set",            "Step 3:  chain_mode_set – timing mode propagated"),
+    ("drm_atomic_bridge_chain_pre_enable",   "Step 4:  chain_pre_enable – forward pre-enable pass"),
+    ("drm_atomic_bridge_chain_enable",       "Step 5:  chain_enable – forward enable pass"),
+    ("drm_atomic_bridge_chain_disable",      "Step 6:  chain_disable – reverse disable pass"),
+    ("drm_atomic_bridge_chain_post_disable", "Step 7:  chain_post_disable – post-disable pass"),
+    ("drm_bridge_hpd_notify",                "Step 8:  hpd_notify – HPD event propagated"),
+    ("drm_bridge_detach",                    "Step 9:  bridge_detach – bridge removed from chain"),
+    ("drm_bridge_remove",                    "Step 10: bridge_remove – bridge removed from global list"),
 ]
+
+
+def find_probe(symbol: str) -> str | None:
+    """Return the best available probe expression for symbol.
+
+    Tries kfunc: first (BTF-based, preferred), then kprobe:.
+    Returns e.g. 'kfunc:drm_bridge_add' or None if unavailable.
+    """
+    for ptype in ("kfunc", "kprobe"):
+        try:
+            r = subprocess.run(
+                [BPFTRACE_BIN, "-l", f"{ptype}:{symbol}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and symbol in r.stdout:
+                return f"{ptype}:{symbol}"
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+    return None
+
+
+def resolve_probes() -> dict[str, str]:
+    """Return {symbol: probe_expr} for all available probes."""
+    print("  Resolving probe types via bpftrace -l …")
+    resolved = {}
+    for sym, _ in PROBE_DEFS:
+        expr = find_probe(sym)
+        if expr:
+            resolved[sym] = expr
+            print(f"    {sym}: {expr.split(':')[0]}")
+        else:
+            print(f"    {sym}: unavailable (SKIP)")
+    return resolved
+
+
+def build_bpftrace_script(resolved: dict[str, str]) -> str:
+    """Build bpftrace script from resolved probe expressions."""
+    lines = ['interval:s:1 { printf("TICK\\n"); }']
+    for sym, expr in resolved.items():
+        lines.append(f'{expr} {{ printf("HIT {sym}\\n"); }}')
+    return "\n".join(lines)
 
 
 def check_root():
@@ -73,7 +91,7 @@ def check_root():
 
 def check_bpftrace():
     try:
-        r = subprocess.run(["bpftrace", "--version"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run([BPFTRACE_BIN, "--version"], capture_output=True, text=True, timeout=5)
         print(f"  bpftrace version: {r.stdout.strip()}")
         return True
     except FileNotFoundError:
@@ -83,7 +101,6 @@ def check_bpftrace():
 
 def check_drm_present():
     """Return True if at least one DRM device node exists."""
-    import glob
     nodes = glob.glob("/dev/dri/card*")
     if nodes:
         print(f"  DRM devices found: {nodes}")
@@ -92,31 +109,16 @@ def check_drm_present():
     return False
 
 
-def resolve_kprobe_symbols():
-    """Check which bridge symbols are present in kallsyms."""
-    available = set()
-    try:
-        with open("/proc/kallsyms") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 3:
-                    available.add(parts[2])
-    except PermissionError:
-        # kallsyms may be restricted; assume all present
-        return {name for name, _ in STEPS}
-    return {name for name, _ in STEPS if name in available}
-
-
-def run_bpftrace(timeout_sec=30):
-    """Run bpftrace and collect hit events, return set of hit function names."""
+def run_bpftrace(script: str, timeout_sec: int = 30) -> set[str]:
+    """Run bpftrace and collect hit events, return set of hit symbol names."""
     proc = subprocess.Popen(
-        ["bpftrace", "-e", BPFTRACE_SCRIPT],
+        [BPFTRACE_BIN, "-e", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
 
-    hits = set()
+    hits: set[str] = set()
     deadline = time.time() + timeout_sec
     print(f"\n  Tracing for {timeout_sec}s (trigger display events if possible)…\n")
 
@@ -127,10 +129,9 @@ def run_bpftrace(timeout_sec=30):
                 break
             line = line.strip()
             if line.startswith("HIT "):
-                parts = line.split()
-                fn = parts[1]
-                hits.add(fn)
-                print(f"  → observed: {fn}")
+                sym = line.split()[1]
+                hits.add(sym)
+                print(f"  → observed: {sym}")
             elif line == "TICK":
                 remaining = int(deadline - time.time())
                 print(f"  … {remaining}s remaining", end="\r", flush=True)
@@ -141,18 +142,18 @@ def run_bpftrace(timeout_sec=30):
     return hits
 
 
-def print_results(hits, available_symbols):
+def print_results(hits: set, resolved: dict) -> None:
     print("\n" + "=" * 60)
     print("DRM Bridge Subsystem – Test Results")
     print("=" * 60)
     all_pass = True
-    for fn, description in STEPS:
-        if fn not in available_symbols:
+    for sym, description in PROBE_DEFS:
+        if sym not in resolved:
             status = SKIP
-            note = "(symbol not in kernel)"
-        elif fn in hits:
+            note = "(probe unavailable – symbol not exported or inlined)"
+        elif sym in hits:
             status = PASS
-            note = ""
+            note = f"({resolved[sym].split(':')[0]})"
         else:
             status = FAIL
             note = "(not observed – may need display event)"
@@ -186,21 +187,23 @@ def main():
         sys.exit(1)
 
     drm_present = check_drm_present()
-    available_symbols = resolve_kprobe_symbols()
+    resolved = resolve_probes()
 
-    unavailable = {name for name, _ in STEPS} - available_symbols
-    if unavailable:
-        print(f"\n  Note: symbols not in kallsyms (will be SKIP): {unavailable}")
+    if not resolved:
+        print(f"\n[{SKIP}] No bridge probes available on this kernel\n")
+        print_results(set(), resolved)
+        return
 
     if not drm_present:
         print(f"\n[{SKIP}] No DRM device – symbol availability check only\n")
-        print_results(set(), available_symbols)
+        print_results(set(), resolved)
         return
 
     trigger_hints()
 
-    hits = run_bpftrace(timeout_sec=30)
-    print_results(hits, available_symbols)
+    script = build_bpftrace_script(resolved)
+    hits = run_bpftrace(script, timeout_sec=30)
+    print_results(hits, resolved)
 
 
 if __name__ == "__main__":

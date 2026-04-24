@@ -28,64 +28,12 @@ PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 SKIP = "\033[33mSKIP\033[0m"
 
-BPFTRACE_SCRIPT = r"""
-interval:s:1 { printf("TICK\n"); }
+BPFTRACE_BIN = "bpftrace"
 
-/* DRM core device lifecycle */
-kprobe:drm_dev_register   { printf("HIT drm_dev_register dev=%lx\n",   arg0); }
-kprobe:drm_dev_unregister { printf("HIT drm_dev_unregister dev=%lx\n", arg0); }
-
-/* Atomic commit path */
-kprobe:drm_atomic_helper_check {
-    printf("HIT drm_atomic_helper_check dev=%lx\n", arg0);
-}
-kprobe:drm_atomic_helper_commit_planes {
-    printf("HIT drm_atomic_helper_commit_planes dev=%lx\n", arg0);
-}
-kprobe:drm_atomic_helper_commit_modeset_enables {
-    printf("HIT drm_atomic_helper_commit_modeset_enables dev=%lx\n", arg0);
-}
-kprobe:drm_atomic_helper_commit_modeset_disables {
-    printf("HIT drm_atomic_helper_commit_modeset_disables dev=%lx\n", arg0);
-}
-
-/* Bridge chain */
-kprobe:drm_atomic_bridge_chain_enable {
-    printf("HIT drm_atomic_bridge_chain_enable bridge=%lx\n", arg0);
-}
-
-/* Vblank */
-kprobe:drm_crtc_send_vblank_event {
-    printf("HIT drm_crtc_send_vblank_event crtc=%lx\n", arg0);
-}
-kprobe:drm_handle_vblank {
-    printf("HIT drm_handle_vblank dev=%lx pipe=%d\n", arg0, arg1);
-}
-
-/* ARM-specific: HDLCD */
-kprobe:hdlcd_irq {
-    printf("HIT hdlcd_irq irq=%d\n", arg0);
-}
-
-/* ARM-specific: Mali-DP */
-kprobe:malidp_irq_handler {
-    printf("HIT malidp_irq_handler irq=%d\n", arg0);
-}
-kprobe:malidp_atomic_commit_hw_done {
-    printf("HIT malidp_atomic_commit_hw_done\n");
-}
-
-/* ARM-specific: Komeda */
-kprobe:komeda_pipeline_unbound {
-    printf("HIT komeda_pipeline_unbound pipeline=%lx\n", arg0);
-}
-kprobe:komeda_crtc_atomic_enable {
-    printf("HIT komeda_crtc_atomic_enable crtc=%lx\n", arg0);
-}
-"""
-
-# (probe_symbol, description)
-STEPS = [
+# (symbol, description)
+# ARM-specific symbols (hdlcd_irq, malidp_irq_handler, komeda_crtc_atomic_enable)
+# will be SKIP if their modules are not loaded.
+PROBE_DEFS = [
     ("drm_dev_register",                             "Step  1: drm_dev_register – DRM device registered"),
     ("drm_atomic_helper_check",                      "Step  2: drm_atomic_helper_check – atomic state validated"),
     ("drm_atomic_helper_commit_planes",              "Step  3: commit_planes – plane HW registers programmed"),
@@ -102,6 +50,47 @@ STEPS = [
 ]
 
 
+def find_probe(symbol: str) -> str | None:
+    """Return the best available probe expression for symbol.
+
+    Tries kfunc: first (BTF-based, preferred), then kprobe:.
+    Returns e.g. 'kfunc:drm_dev_register' or None if unavailable.
+    """
+    for ptype in ("kfunc", "kprobe"):
+        try:
+            r = subprocess.run(
+                [BPFTRACE_BIN, "-l", f"{ptype}:{symbol}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and symbol in r.stdout:
+                return f"{ptype}:{symbol}"
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+    return None
+
+
+def resolve_probes() -> dict[str, str]:
+    """Return {symbol: probe_expr} for all available probes."""
+    print("  Resolving probe types via bpftrace -l …")
+    resolved = {}
+    for sym, _ in PROBE_DEFS:
+        expr = find_probe(sym)
+        if expr:
+            resolved[sym] = expr
+            print(f"    {sym}: {expr.split(':')[0]}")
+        else:
+            print(f"    {sym}: unavailable (SKIP)")
+    return resolved
+
+
+def build_bpftrace_script(resolved: dict[str, str]) -> str:
+    """Build bpftrace script from resolved probe expressions."""
+    lines = ['interval:s:1 { printf("TICK\\n"); }']
+    for sym, expr in resolved.items():
+        lines.append(f'{expr} {{ printf("HIT {sym}\\n"); }}')
+    return "\n".join(lines)
+
+
 def check_root():
     if os.geteuid() != 0:
         print(f"[{FAIL}] Must run as root")
@@ -110,7 +99,7 @@ def check_root():
 
 def check_bpftrace():
     try:
-        r = subprocess.run(["bpftrace", "--version"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run([BPFTRACE_BIN, "--version"], capture_output=True, text=True, timeout=5)
         print(f"  bpftrace: {r.stdout.strip()}")
         return True
     except FileNotFoundError:
@@ -144,27 +133,14 @@ def detect_arm_driver():
     return loaded
 
 
-def resolve_symbols():
-    available = set()
-    try:
-        with open("/proc/kallsyms") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 3:
-                    available.add(parts[2])
-    except PermissionError:
-        return {fn for fn, _ in STEPS}
-    return {fn for fn, _ in STEPS if fn in available}
-
-
-def run_bpftrace(timeout_sec=30):
+def run_bpftrace(script: str, timeout_sec: int = 30) -> set[str]:
     proc = subprocess.Popen(
-        ["bpftrace", "-e", BPFTRACE_SCRIPT],
+        [BPFTRACE_BIN, "-e", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    hits = set()
+    hits: set[str] = set()
     deadline = time.time() + timeout_sec
     print(f"\n  Tracing for {timeout_sec}s (trigger display activity if possible)…\n")
     try:
@@ -174,9 +150,9 @@ def run_bpftrace(timeout_sec=30):
                 break
             line = line.strip()
             if line.startswith("HIT "):
-                fn = line.split()[1]
-                hits.add(fn)
-                print(f"  → observed: {fn}")
+                sym = line.split()[1]
+                hits.add(sym)
+                print(f"  → observed: {sym}")
             elif line == "TICK":
                 remaining = int(deadline - time.time())
                 print(f"  … {remaining}s remaining", end="\r", flush=True)
@@ -186,18 +162,18 @@ def run_bpftrace(timeout_sec=30):
     return hits
 
 
-def print_results(hits, available):
+def print_results(hits: set, resolved: dict) -> None:
     print("\n" + "=" * 65)
     print("ARM DRM Display Subsystem – Test Results")
     print("=" * 65)
     all_pass = True
-    for fn, desc in STEPS:
-        if fn not in available:
+    for sym, desc in PROBE_DEFS:
+        if sym not in resolved:
             status = SKIP
-            note = "(symbol absent – driver not loaded?)"
-        elif fn in hits:
+            note = "(probe unavailable – symbol absent or module not loaded)"
+        elif sym in hits:
             status = PASS
-            note = ""
+            note = f"({resolved[sym].split(':')[0]})"
         else:
             status = FAIL
             note = "(not observed – trigger display event)"
@@ -227,17 +203,22 @@ def main():
         sys.exit(1)
     drm_present = check_drm_present()
     detect_arm_driver()
-    available = resolve_symbols()
-    unavail = {fn for fn, _ in STEPS} - available
-    if unavail:
-        print(f"\n  Symbols not in kallsyms (SKIP): {unavail}")
+    resolved = resolve_probes()
+
+    if not resolved:
+        print(f"\n[{SKIP}] No ARM DRM probes available on this kernel\n")
+        print_results(set(), resolved)
+        return
+
     if not drm_present:
         print(f"\n[{SKIP}] No DRM device – symbol check only\n")
-        print_results(set(), available)
+        print_results(set(), resolved)
         return
+
     tips()
-    hits = run_bpftrace(timeout_sec=30)
-    print_results(hits, available)
+    script = build_bpftrace_script(resolved)
+    hits = run_bpftrace(script, timeout_sec=30)
+    print_results(hits, resolved)
 
 
 if __name__ == "__main__":
