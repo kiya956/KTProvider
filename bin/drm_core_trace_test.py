@@ -569,6 +569,34 @@ def step10_dma_fence(dev_path: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Stimulator helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _launch_stimulator():
+    """Launch drm_stimulate.py in background to generate GPU/display activity."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drm_stimulate.py")
+    if not os.path.exists(script):
+        return None
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(1.5)   # let bpftrace attach + GPU/KMS initialise
+        return proc
+    except Exception:
+        return None
+
+def _stop_stimulator(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -615,9 +643,11 @@ def main():
                      "gem_handle", "mode_resources", "drm_read", "drm_release"]:
             record(name, False)
 
-    # ── Steps 9–10: passive observation (no open fd needed) ───────────────
+    # ── Steps 9–10: passive observation — launch stimulator first ────────
+    stim = _launch_stimulator()
     step9_vblank(dev)
     step10_dma_fence(dev)
+    _stop_stimulator(stim)
 
     # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{BOLD}══════════════════════ Results ══════════════════════{RESET}")

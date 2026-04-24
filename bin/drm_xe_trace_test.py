@@ -727,6 +727,34 @@ def step12_vm_destroy(fd: int, vm_id: int) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Stimulator helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _launch_stimulator():
+    """Launch drm_stimulate.py in background to generate GPU/display activity."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drm_stimulate.py")
+    if not os.path.exists(script):
+        return None
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(1.5)   # let bpftrace attach + GPU initialise
+        return proc
+    except Exception:
+        return None
+
+def _stop_stimulator(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -762,8 +790,10 @@ def main():
     step5_gem_mmap_offset(fd, handle)
     eq_id  = step6_exec_queue_create(fd, vm_id)
     step7_exec_dispatch(fd, eq_id)
+    stim = _launch_stimulator()
     step8_sched_job_run(fd)
     step9_dma_fence_signal(fd)
+    _stop_stimulator(stim)
     step10_vm_rebind(fd)
     step11_exec_queue_destroy(fd, eq_id)
 

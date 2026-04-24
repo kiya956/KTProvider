@@ -1,3 +1,15 @@
+unit: job
+id: kprovider_drm_module
+plugin: resource
+_summary: Enumerate loaded DRM-related kernel modules
+command:
+ for mod in i915 xe amdgpu nouveau hdlcd malidp komeda; do
+   if grep -q "^${mod} " /proc/modules 2>/dev/null; then
+     echo "name: $mod"
+     echo ""
+   fi
+ done
+
 unit: category
 id: kprovider/drm
 _name: DRM GPU Drivers
@@ -27,11 +39,11 @@ _description:
  Requires an Intel GPU with the i915 module loaded.
 plugin: shell
 category_id: kprovider/drm
+requires: kprovider_drm_module.name == 'i915'
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^i915 ' /proc/modules || { echo "i915 module not loaded — skipping"; exit 1; }
  drm_i915_trace_test.py
 
 id: kprovider/drm/amd
@@ -44,11 +56,11 @@ _description:
  Requires an AMD GPU with the amdgpu module loaded.
 plugin: shell
 category_id: kprovider/drm
+requires: kprovider_drm_module.name == 'amdgpu'
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^amdgpu ' /proc/modules || { echo "amdgpu module not loaded — skipping"; exit 1; }
  drm_amd_trace_test.py
 
 id: kprovider/drm/nouveau
@@ -61,11 +73,11 @@ _description:
  Requires an NVIDIA GPU with the nouveau module loaded.
 plugin: shell
 category_id: kprovider/drm
+requires: kprovider_drm_module.name == 'nouveau'
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^nouveau ' /proc/modules || { echo "nouveau module not loaded — skipping"; exit 1; }
  drm_nouveau_trace_test.py
 
 id: kprovider/drm/xe
@@ -78,11 +90,11 @@ _description:
  Requires an Intel GPU with the xe module loaded (kernel >= 6.8).
 plugin: shell
 category_id: kprovider/drm
+requires: kprovider_drm_module.name == 'xe'
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^xe ' /proc/modules || { echo "xe module not loaded — skipping"; exit 1; }
  drm_xe_trace_test.py
 
 id: kprovider/drm/bridge
@@ -112,9 +124,9 @@ _description:
  Requires an ARM SoC or QEMU with ARM display hardware.
 plugin: shell
 category_id: kprovider/drm
+requires: kprovider_drm_module.name in ('hdlcd', 'malidp', 'komeda')
 user: root
 estimated_duration: 120.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -qE '^(hdlcd|malidp|komeda) ' /proc/modules || { echo "No ARM display module loaded (hdlcd/malidp/komeda) — skipping"; exit 1; }
  drm_arm_trace_test.py
