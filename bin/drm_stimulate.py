@@ -5,10 +5,12 @@ drm_stimulate.py — Background DRM activity generator for trace tests.
 Triggers bpftrace probes that need active GPU/display:
   - xe_sched_job_run   (via NOP Xe GPU job loop on BCS engine)
   - dma_fence_signal   (side-effect of GPU jobs completing)
-  - drm_handle_vblank  (via KMS page-flip loop if a display is connected)
+  - drm_handle_vblank  (via pygame color cycling through the compositor)
 
-Usage: sudo python3 drm_stimulate.py [--card /dev/dri/card1]
+Usage: sudo python3 drm_stimulate.py [--render /dev/dri/renderD128]
        Run in background; send SIGTERM to stop.
+
+Requires: python3-pygame (sudo apt install python3-pygame)
 """
 import argparse
 import ctypes
@@ -48,7 +50,6 @@ def _ioctl(fd, req, arg=None):
 def _IOC(d, t, n, s): return (d << 30) | (t << 8) | n | (s << 16)
 _IOWR = lambda t, n, s: _IOC(3, t, n, s)
 _IOW  = lambda t, n, s: _IOC(1, t, n, s)
-_IO   = lambda t, n:    _IOC(0, t, n, 0)
 B   = ord('d')
 CMD = 0x40   # DRM_COMMAND_BASE
 
@@ -56,109 +57,6 @@ CMD = 0x40   # DRM_COMMAND_BASE
 class DrmGemClose(ctypes.Structure):
     _fields_ = [("handle", ctypes.c_uint32), ("pad", ctypes.c_uint32)]
 DRM_IOCTL_GEM_CLOSE  = _IOW(B, 0x09, ctypes.sizeof(DrmGemClose))
-DRM_IOCTL_SET_MASTER  = _IO(B, 0x1e)
-DRM_IOCTL_DROP_MASTER = _IO(B, 0x1f)
-
-# ── KMS structures ────────────────────────────────────────────────────────────
-class DrmModeCardRes(ctypes.Structure):
-    _fields_ = [
-        ("fb_id_ptr", ctypes.c_uint64), ("crtc_id_ptr", ctypes.c_uint64),
-        ("connector_id_ptr", ctypes.c_uint64), ("encoder_id_ptr", ctypes.c_uint64),
-        ("count_fbs", ctypes.c_uint32), ("count_crtcs", ctypes.c_uint32),
-        ("count_connectors", ctypes.c_uint32), ("count_encoders", ctypes.c_uint32),
-        ("min_width", ctypes.c_uint32), ("max_width", ctypes.c_uint32),
-        ("min_height", ctypes.c_uint32), ("max_height", ctypes.c_uint32),
-    ]
-
-class DrmModeModeInfo(ctypes.Structure):
-    _fields_ = [
-        ("clock", ctypes.c_uint32),
-        ("hdisplay",   ctypes.c_uint16), ("hsync_start", ctypes.c_uint16),
-        ("hsync_end",  ctypes.c_uint16), ("htotal",      ctypes.c_uint16),
-        ("hskew",      ctypes.c_uint16),
-        ("vdisplay",   ctypes.c_uint16), ("vsync_start", ctypes.c_uint16),
-        ("vsync_end",  ctypes.c_uint16), ("vtotal",      ctypes.c_uint16),
-        ("vscan",      ctypes.c_uint16),
-        ("vrefresh", ctypes.c_uint32), ("flags", ctypes.c_uint32),
-        ("type", ctypes.c_uint32), ("name", ctypes.c_char * 32),
-    ]
-
-class DrmModeGetConnector(ctypes.Structure):
-    _fields_ = [
-        ("encoders_ptr", ctypes.c_uint64), ("modes_ptr", ctypes.c_uint64),
-        ("props_ptr", ctypes.c_uint64), ("prop_values_ptr", ctypes.c_uint64),
-        ("count_modes", ctypes.c_uint32), ("count_props", ctypes.c_uint32),
-        ("count_encoders", ctypes.c_uint32), ("encoder_id", ctypes.c_uint32),
-        ("connector_id", ctypes.c_uint32), ("connector_type", ctypes.c_uint32),
-        ("connector_type_id", ctypes.c_uint32), ("connection", ctypes.c_uint32),
-        ("mm_width", ctypes.c_uint32), ("mm_height", ctypes.c_uint32),
-        ("subpixel", ctypes.c_uint32), ("pad", ctypes.c_uint32),
-    ]
-
-class DrmModeGetEncoder(ctypes.Structure):
-    _fields_ = [
-        ("encoder_id", ctypes.c_uint32), ("encoder_type", ctypes.c_uint32),
-        ("crtc_id", ctypes.c_uint32),
-        ("possible_crtcs", ctypes.c_uint32), ("possible_clones", ctypes.c_uint32),
-    ]
-
-class DrmModeCreateDumb(ctypes.Structure):
-    _fields_ = [
-        ("height", ctypes.c_uint32), ("width", ctypes.c_uint32),
-        ("bpp", ctypes.c_uint32), ("flags", ctypes.c_uint32),
-        ("handle", ctypes.c_uint32), ("pitch", ctypes.c_uint32),
-        ("size", ctypes.c_uint64),
-    ]
-
-class DrmModeMapDumb(ctypes.Structure):
-    _fields_ = [
-        ("handle", ctypes.c_uint32), ("pad", ctypes.c_uint32),
-        ("offset", ctypes.c_uint64),
-    ]
-
-class DrmModeFbCmd(ctypes.Structure):
-    _fields_ = [
-        ("fb_id", ctypes.c_uint32), ("width", ctypes.c_uint32),
-        ("height", ctypes.c_uint32), ("pitch", ctypes.c_uint32),
-        ("bpp", ctypes.c_uint32), ("depth", ctypes.c_uint32),
-        ("handle", ctypes.c_uint32),
-    ]
-
-class DrmModeFbId(ctypes.Structure):
-    _fields_ = [("fb_id", ctypes.c_uint32)]
-
-class DrmModeCrtc(ctypes.Structure):
-    _fields_ = [
-        ("set_connectors_ptr", ctypes.c_uint64),
-        ("count_connectors", ctypes.c_uint32), ("crtc_id", ctypes.c_uint32),
-        ("fb_id", ctypes.c_uint32),
-        ("x", ctypes.c_uint32), ("y", ctypes.c_uint32),
-        ("gamma_size", ctypes.c_uint32), ("mode_valid", ctypes.c_uint32),
-        ("mode", DrmModeModeInfo),
-    ]
-
-class DrmModePageFlip(ctypes.Structure):
-    _fields_ = [
-        ("crtc_id", ctypes.c_uint32), ("fb_id", ctypes.c_uint32),
-        ("flags", ctypes.c_uint32), ("reserved", ctypes.c_uint32),
-        ("user_data", ctypes.c_uint64),
-    ]
-
-class DrmModeDestroyDumb(ctypes.Structure):
-    _fields_ = [("handle", ctypes.c_uint32), ("pad", ctypes.c_uint32),
-                ("size", ctypes.c_uint64)]
-
-DRM_IOCTL_MODE_GETRESOURCES = _IOWR(B, 0xA0, ctypes.sizeof(DrmModeCardRes))
-DRM_IOCTL_MODE_GETCONNECTOR = _IOWR(B, 0xA7, ctypes.sizeof(DrmModeGetConnector))
-DRM_IOCTL_MODE_GETENCODER   = _IOWR(B, 0xA6, ctypes.sizeof(DrmModeGetEncoder))
-DRM_IOCTL_MODE_CREATE_DUMB  = _IOWR(B, 0xB2, ctypes.sizeof(DrmModeCreateDumb))
-DRM_IOCTL_MODE_MAP_DUMB     = _IOWR(B, 0xB3, ctypes.sizeof(DrmModeMapDumb))
-DRM_IOCTL_MODE_ADDFB        = _IOWR(B, 0xAE, ctypes.sizeof(DrmModeFbCmd))
-DRM_IOCTL_MODE_RMFB         = _IOWR(B, 0xAF, ctypes.sizeof(DrmModeFbId))
-DRM_IOCTL_MODE_SETCRTC      = _IOWR(B, 0xA2, ctypes.sizeof(DrmModeCrtc))
-DRM_IOCTL_MODE_PAGE_FLIP    = _IOWR(B, 0xB0, ctypes.sizeof(DrmModePageFlip))
-DRM_IOCTL_MODE_DESTROY_DUMB = _IOWR(B, 0xB4, ctypes.sizeof(DrmModeDestroyDumb))
-DRM_MODE_PAGE_FLIP_EVENT    = 0x01
 
 # ── Xe structures ─────────────────────────────────────────────────────────────
 class XeVmCreate(ctypes.Structure):
@@ -197,6 +95,7 @@ DRM_IOCTL_XE_GEM_MMAP_OFFSET = _IOWR(B, CMD + 0x02, ctypes.sizeof(XeGemMmapOffse
 
 # VM_BIND with inline bind_op (num_binds=1) — mirrors struct drm_xe_vm_bind
 # when num_binds==1: the union field 'bind' is an inline drm_xe_vm_bind_op.
+# Layout matches kernel 6.17+ UAPI where pat_index is u16 right after obj.
 class XeVmBind(ctypes.Structure):
     _fields_ = [
         ("extensions",      ctypes.c_uint64),   # offset  0
@@ -207,12 +106,13 @@ class XeVmBind(ctypes.Structure):
         # inline drm_xe_vm_bind_op at offset 24
         ("bind_extensions", ctypes.c_uint64),   #        24
         ("bind_obj",        ctypes.c_uint32),   #        32  (GEM handle; 0 for unmap)
-        ("bind_obj_pad",    ctypes.c_uint32),   #        36
+        ("bind_pat_index",  ctypes.c_uint16),   #        36  (PAT index for caching/coherency)
+        ("bind_obj_pad",    ctypes.c_uint16),   #        38
         ("bind_obj_offset", ctypes.c_uint64),   #        40
         ("bind_range",      ctypes.c_uint64),   #        48
         ("bind_addr",       ctypes.c_uint64),   #        56
-        ("bind_pat_index",  ctypes.c_uint32),   #        64
-        ("bind_flags",      ctypes.c_uint32),   #        68  low byte = op (0=MAP,1=UNMAP)
+        ("bind_op",         ctypes.c_uint32),   #        64  (0=MAP, 1=UNMAP)
+        ("bind_flags",      ctypes.c_uint32),   #        68
         ("bind_prefetch",   ctypes.c_uint32),   #        72
         ("bind_op_pad",     ctypes.c_uint32),   #        76
         ("bind_reserved",   ctypes.c_uint64 * 2), #      80–96
@@ -272,7 +172,12 @@ def _find_xe_card():
             drv = os.path.basename(
                 os.readlink(f"/sys/class/drm/card{idx}/device/driver"))
             if "xe" in drv:
-                return card, f"/dev/dri/renderD{128 + int(idx)}"
+                # Find actual render node via sysfs
+                render_nodes = glob.glob(f"/sys/class/drm/card{idx}/device/drm/renderD*")
+                if render_nodes:
+                    rn = os.path.basename(render_nodes[0])
+                    return card, f"/dev/dri/{rn}"
+                return card, None
         except (OSError, ValueError):
             pass
     return None, None
@@ -310,13 +215,14 @@ def xe_nop_loop(render_dev: str) -> None:
                            mmap.PROT_READ | mmap.PROT_WRITE,
                            offset=mmap_arg.offset)
         mapped.write(NOP_BATCH)
-        mapped.flush()
+        # No flush — GPU WC/WB mapping doesn't support msync
 
         # VM_BIND: map GEM at BATCH_GPU_VA (synchronous, exec_queue_id=0)
+        # pat_index=1 required for WB-cached objects (coherent mapping)
         bind = XeVmBind(vm_id=vm_id, num_binds=1,
                         bind_obj=handle, bind_range=PAGE_SIZE,
-                        bind_addr=BATCH_GPU_VA,
-                        bind_flags=DRM_XE_VM_BIND_OP_MAP)
+                        bind_addr=BATCH_GPU_VA, bind_pat_index=1,
+                        bind_op=DRM_XE_VM_BIND_OP_MAP)
         if _ioctl(fd, DRM_IOCTL_XE_VM_BIND, bind) != 0:
             return
 
@@ -344,7 +250,7 @@ def xe_nop_loop(render_dev: str) -> None:
             # Unbind from GPU VA
             unbind = XeVmBind(vm_id=vm_id, num_binds=1,
                               bind_range=PAGE_SIZE, bind_addr=BATCH_GPU_VA,
-                              bind_flags=DRM_XE_VM_BIND_OP_UNMAP)
+                              bind_op=DRM_XE_VM_BIND_OP_UNMAP)
             _ioctl(fd, DRM_IOCTL_XE_VM_BIND, unbind)
             if mapped:
                 mapped.close()
@@ -356,152 +262,83 @@ def xe_nop_loop(render_dev: str) -> None:
         os.close(fd)
         print("[stimulate] Xe NOP loop stopped", flush=True)
 
-# ── KMS page-flip loop ────────────────────────────────────────────────────────
-def _connector_info(fd: int, conn_id: int):
-    """Return (mode, crtc_id) for a connected connector, or None."""
-    c = DrmModeGetConnector(connector_id=conn_id)
-    _ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, c)
-    if c.connection != 1 or c.count_modes == 0:   # 1 = DRM_MODE_CONNECTED
-        return None
-    modes    = (DrmModeModeInfo * c.count_modes)()
-    encoders = (ctypes.c_uint32 * max(c.count_encoders, 1))()
-    c2 = DrmModeGetConnector(
-        connector_id=conn_id,
-        modes_ptr=ctypes.addressof(modes),
-        encoders_ptr=ctypes.addressof(encoders),
-        count_modes=c.count_modes,
-        count_encoders=c.count_encoders,
-    )
-    if _ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, c2) != 0 or c2.encoder_id == 0:
-        return None
-    enc = DrmModeGetEncoder(encoder_id=c2.encoder_id)
-    if _ioctl(fd, DRM_IOCTL_MODE_GETENCODER, enc) != 0 or enc.crtc_id == 0:
-        return None
-    return modes[0], enc.crtc_id
+# ── Display flash loop (triggers vblank via compositor scanout) ────────────────
+def flash_screen_loop():
+    """Cycle colors via pygame/SDL on Wayland — forces compositor page flips."""
+    # Find Wayland socket
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        socks = sorted(glob.glob(os.path.join(xdg, "wayland-*")))
+        if not socks:
+            socks = []
+    else:
+        socks = []
 
-def kms_flip_loop(card_dev: str) -> None:
-    """KMS double-buffer page-flip loop — triggers drm_handle_vblank."""
-    try:
-        fd = os.open(card_dev, os.O_RDWR)
-    except OSError as e:
-        print(f"[stimulate] Cannot open {card_dev}: {e}", flush=True)
-        return
+    if not socks:
+        candidates = sorted(glob.glob("/run/user/*/wayland-*"))
+        candidates = [c for c in candidates if not c.endswith(".lock")]
+        if not candidates:
+            print("[stimulate] No Wayland socket found — display flash skipped",
+                  flush=True)
+            return
+        xdg = os.path.dirname(candidates[0])
+        socks = [candidates[0]]
 
-    if _ioctl(fd, DRM_IOCTL_SET_MASTER) != 0:
-        print("[stimulate] Cannot get DRM master — KMS flips skipped", flush=True)
-        os.close(fd)
-        return
-
-    fb_handles: list[tuple[int, int, int]] = []   # (handle, fb_id, size)
-    maps: list[mmap.mmap] = []
+    wayland_display = os.path.basename(socks[0])
+    os.environ["XDG_RUNTIME_DIR"] = xdg
+    os.environ["WAYLAND_DISPLAY"] = wayland_display
+    os.environ.setdefault("SDL_VIDEODRIVER", "wayland")
 
     try:
-        res = DrmModeCardRes()
-        if _ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, res) != 0 or res.count_connectors == 0:
-            return
+        import pygame
+    except ImportError:
+        print("[stimulate] pygame not installed — display flash skipped\n"
+              "  Install with: sudo apt install python3-pygame", flush=True)
+        return
 
-        conn_ids = (ctypes.c_uint32 * res.count_connectors)()
-        crtc_ids = (ctypes.c_uint32 * max(res.count_crtcs, 1))()
-        res2 = DrmModeCardRes(
-            connector_id_ptr=ctypes.addressof(conn_ids),
-            crtc_id_ptr=ctypes.addressof(crtc_ids),
-            count_connectors=res.count_connectors,
-            count_crtcs=res.count_crtcs,
-        )
-        if _ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, res2) != 0:
-            return
+    pygame.init()
+    try:
+        info = pygame.display.Info()
+        w, h = info.current_w, info.current_h
+        if not w or not h:
+            w, h = 1920, 1080
+    except Exception:
+        w, h = 1920, 1080
 
-        conn_result = None
-        for cid in conn_ids:
-            info = _connector_info(fd, cid)
-            if info:
-                conn_result = info
-                break
-        if not conn_result:
-            print("[stimulate] No connected display — KMS flips skipped", flush=True)
-            return
+    screen = pygame.display.set_mode((w, h), pygame.SCALED)
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255),
+              (255, 255, 255), (0, 0, 0)]
+    print(f"[stimulate] Display flash started ({w}×{h})", flush=True)
 
-        mode, crtc_id = conn_result
-        w, h = mode.hdisplay, mode.vdisplay
-        print(f"[stimulate] KMS flip loop: {w}×{h} CRTC={crtc_id}", flush=True)
-
-        for _ in range(2):
-            cd = DrmModeCreateDumb(width=w, height=h, bpp=32)
-            if _ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, cd) != 0:
+    idx = 0
+    clock = pygame.time.Clock()
+    while _running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                print("[stimulate] Display flash stopped", flush=True)
                 return
-            md = DrmModeMapDumb(handle=cd.handle)
-            _ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, md)
-            fb = DrmModeFbCmd(width=w, height=h, pitch=cd.pitch,
-                              bpp=32, depth=24, handle=cd.handle)
-            _ioctl(fd, DRM_IOCTL_MODE_ADDFB, fb)
-            m = mmap.mmap(fd, cd.size, mmap.MAP_SHARED,
-                          mmap.PROT_READ | mmap.PROT_WRITE, offset=md.offset)
-            # Fill with random noise
-            m.write(os.urandom(min(int(cd.size), 1 << 20)))
-            m.flush()
-            fb_handles.append((cd.handle, fb.fb_id, int(cd.size)))
-            maps.append(m)
+        screen.fill(colors[idx % len(colors)])
+        pygame.display.flip()
+        idx += 1
+        clock.tick(2)   # ~2 fps, enough to keep scanout busy
 
-        if len(fb_handles) < 2:
-            return
-
-        # Initial mode-set
-        conn_arr = (ctypes.c_uint32 * 1)(conn_ids[0])
-        crtc_cmd = DrmModeCrtc(
-            set_connectors_ptr=ctypes.addressof(conn_arr),
-            count_connectors=1, crtc_id=crtc_id,
-            fb_id=fb_handles[0][1], mode_valid=1, mode=mode,
-        )
-        if _ioctl(fd, DRM_IOCTL_MODE_SETCRTC, crtc_cmd) != 0:
-            print("[stimulate] SETCRTC failed — KMS flips skipped", flush=True)
-            return
-
-        cur = 0
-        while _running:
-            nxt = 1 - cur
-            # Write a 4 KB noise stripe so the display visibly changes
-            maps[nxt].seek(0)
-            maps[nxt].write(os.urandom(PAGE_SIZE))
-            maps[nxt].flush()
-
-            flip = DrmModePageFlip(crtc_id=crtc_id, fb_id=fb_handles[nxt][1],
-                                   flags=DRM_MODE_PAGE_FLIP_EVENT)
-            if _ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, flip) == 0:
-                try:
-                    os.read(fd, 32)   # consume the DRM_EVENT_FLIP_COMPLETE
-                except OSError:
-                    pass
-                cur = nxt
-            else:
-                time.sleep(0.016)   # ~60 Hz fallback
-
-    finally:
-        for m in maps:
-            m.close()
-        for handle, fb_id, _ in fb_handles:
-            rmfb = DrmModeFbId(fb_id=fb_id)
-            _ioctl(fd, DRM_IOCTL_MODE_RMFB, rmfb)
-            dd = DrmModeDestroyDumb(handle=handle)
-            _ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, dd)
-        _ioctl(fd, DRM_IOCTL_DROP_MASTER)
-        os.close(fd)
-        print("[stimulate] KMS flip loop stopped", flush=True)
+    pygame.quit()
+    print("[stimulate] Display flash stopped", flush=True)
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(
         description="Background DRM stimulator — triggers vblank + GPU probes")
-    ap.add_argument("--card",   default=None)
     ap.add_argument("--render", default=None)
     args = ap.parse_args()
 
     xe_card, xe_render = _find_xe_card()
-    card   = args.card   or xe_card   or "/dev/dri/card0"
     render = args.render or xe_render or "/dev/dri/renderD128"
 
     import threading
-    kms = threading.Thread(target=kms_flip_loop, args=(card,), daemon=True)
-    kms.start()
+    flash = threading.Thread(target=flash_screen_loop, daemon=True)
+    flash.start()
 
     if render and os.path.exists(render):
         xe_nop_loop(render)
@@ -509,7 +346,7 @@ def main():
         while _running:
             time.sleep(0.1)
 
-    kms.join(timeout=3)
+    flash.join(timeout=3)
 
 if __name__ == "__main__":
     main()

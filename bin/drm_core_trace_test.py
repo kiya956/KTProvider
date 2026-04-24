@@ -523,21 +523,35 @@ def step8_drm_release(fd: int) -> bool:
 def step9_vblank(dev_path: str) -> bool:
     print(f"\n{BOLD}Step 9 — drm_handle_vblank() (passive observation){RESET}")
 
-    probe_expr = find_probe("drm_handle_vblank")
-    if probe_expr is None:
-        info_("drm_handle_vblank not available — skipping")
+    # Build ordered list of vblank probe candidates.
+    # drm_handle_vblank is the legacy path; Xe (and some modern drivers)
+    # use drm_crtc_send_vblank_event instead — the symbol may exist but
+    # never fire, so we try each in turn until one hits.
+    candidates = []
+    for sym in ("drm_handle_vblank", "drm_crtc_send_vblank_event"):
+        expr = find_probe(sym)
+        if expr is not None:
+            candidates.append(expr)
+
+    if not candidates:
+        info_("no vblank probe available — skipping")
         record("drm_handle_vblank (passive)", True)
         return True
 
-    info_(f"Probing {probe_expr}  for 5 seconds")
-    probe = BpfProbe(probe_expr)
-    probe.start()
-    hit = probe.wait(timeout=5)
-    probe.stop()
+    hit = False
+    for probe_expr in candidates:
+        info_(f"Probing {probe_expr}  for 5 seconds")
+        probe = BpfProbe(probe_expr)
+        probe.start()
+        hit = probe.wait(timeout=5)
+        probe.stop()
+        if hit:
+            break
+        info_("  ↳ no events — trying next candidate")
 
     record("drm_handle_vblank (passive)", hit)
     if hit:
-        info_("  ↳ vblank interrupt observed — display is active")
+        info_("  ↳ vblank event observed — display is active")
     else:
         info_("  ↳ No vblank in 5 s (display may be off or headless)")
     return hit
@@ -580,11 +594,16 @@ def _launch_stimulator():
     try:
         proc = subprocess.Popen(
             [sys.executable, script],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
-        time.sleep(1.5)   # let bpftrace attach + GPU/KMS initialise
+        time.sleep(3)   # pygame init + Xe VM/GEM/bind setup
+        if proc.poll() is not None:
+            out = proc.stdout.read().decode(errors="replace")
+            print(f"  [INFO] Stimulator exited early:\n{out}", flush=True)
+            return None
         return proc
-    except Exception:
+    except Exception as e:
+        print(f"  [INFO] Stimulator launch failed: {e}", flush=True)
         return None
 
 def _stop_stimulator(proc):

@@ -632,9 +632,17 @@ def step7_exec_dispatch(fd: int, eq_id: int) -> bool:
 
 def step8_sched_job_run(fd: int) -> bool:
     print(f"\n{BOLD}Step 8 — xe_sched_job_run (GPU scheduler, passive){RESET}")
-    info_("Probing kfunc:xe_sched_job_run for 5 seconds")
 
-    probe = BpfProbe("kfunc:xe_sched_job_run")
+    # xe_sched_job_run may be inlined/notrace on some kernels;
+    # fall back to xe_sched_job_arm which is always traceable.
+    probe_expr = find_probe("xe_sched_job_run", "xe_sched_job_arm")
+    if probe_expr is None:
+        info_("no xe scheduler probe available — skipping")
+        record("xe_sched_job_run (GPU job execution, passive)", True)
+        return True
+
+    info_(f"Probing {probe_expr} for 5 seconds")
+    probe = BpfProbe(probe_expr)
     probe.start()
     hit = probe.wait(timeout=5); probe.stop()
 
@@ -738,11 +746,16 @@ def _launch_stimulator():
     try:
         proc = subprocess.Popen(
             [sys.executable, script],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
-        time.sleep(1.5)   # let bpftrace attach + GPU initialise
+        time.sleep(3)   # pygame init + Xe VM/GEM/bind setup
+        if proc.poll() is not None:
+            out = proc.stdout.read().decode(errors="replace")
+            print(f"  [INFO] Stimulator exited early:\n{out}", flush=True)
+            return None
         return proc
-    except Exception:
+    except Exception as e:
+        print(f"  [INFO] Stimulator launch failed: {e}", flush=True)
         return None
 
 def _stop_stimulator(proc):
