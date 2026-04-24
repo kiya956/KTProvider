@@ -293,6 +293,26 @@ def bpftrace_available() -> bool:
         return False
 
 
+def find_probe(*symbols: str) -> str:
+    """Return the first available probe expression for any of the given symbols.
+
+    Tries kfunc: then kprobe: for each symbol using bpftrace -l.
+    Returns e.g. 'kfunc:amdgpu_gem_mmap_ioctl' or falls back to kprobe:.
+    """
+    for sym in symbols:
+        for ptype in ("kfunc", "kprobe"):
+            try:
+                r = subprocess.run(
+                    [BPFTRACE_BIN, "-l", f"{ptype}:{sym}"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode == 0 and sym in r.stdout:
+                    return f"{ptype}:{sym}"
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+    return f"kprobe:{symbols[0]}"
+
+
 class BpfProbe:
     """Run a bpftrace one-liner in background; set event when probe fires."""
 
@@ -515,9 +535,10 @@ def step5_gem_mmap(fd: int, handle: int) -> bool:
         info_("  ↳ No valid handle — skipping")
         record("amdgpu_gem_mmap_ioctl", False); return False
 
-    info_("Probing kfunc:amdgpu_gem_mmap")
+    probe_expr = find_probe("amdgpu_gem_mmap_ioctl", "amdgpu_gem_mmap")
+    info_(f"Probing {probe_expr}")
 
-    probe = BpfProbe("kfunc:amdgpu_gem_mmap")
+    probe = BpfProbe(probe_expr)
     probe.start()
 
     mm = AmdgpuGemMmapUnion()
