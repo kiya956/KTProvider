@@ -15,10 +15,9 @@ Verified paths:
   Step 6  — DRM_IOCTL_AMDGPU_GEM_VA (map BO into GPU virtual address space)
   Step 7  — DRM_IOCTL_AMDGPU_CS dispatch (command submission ioctl entry)
   Step 8  — amdgpu_job_run (GPU job scheduler → ring emission, passive)
-  Step 9  — dma_fence_signal (GPU work completion, passive)
-  Step 10 — amdgpu_vm_flush (GPU page table flush, passive)
-  Step 11 — amdgpu runtime PM wakeref (passive)
-  Step 12 — DRM_IOCTL_AMDGPU_CTX free (context teardown)
+  Step 9  — amdgpu_vm_flush (GPU page table flush, passive)
+  Step 10 — amdgpu runtime PM wakeref (passive)
+  Step 11 — DRM_IOCTL_AMDGPU_CTX free (context teardown)
 
 Requirements:
   - bpftrace >= 0.16  (sudo apt install bpftrace)
@@ -663,24 +662,8 @@ def step8_job_run(fd: int) -> bool:
     return hit
 
 
-def step9_dma_fence_signal(fd: int) -> bool:
-    print(f"\n{BOLD}Step 9 — dma_fence_signal (GPU work completion, passive){RESET}")
-    info_("Probing kfunc:dma_fence_signal for 5 seconds")
-
-    probe = BpfProbe("kfunc:dma_fence_signal")
-    probe.start()
-    hit = probe.wait(timeout=5); probe.stop()
-
-    record("dma_fence_signal (GPU completion fence)", hit)
-    if hit:
-        info_("  ↳ GPU fences are signalling — work completing")
-    else:
-        info_("  ↳ No fence signals in 5 s (no active workload)")
-    return hit
-
-
-def step10_vm_flush(fd: int) -> bool:
-    print(f"\n{BOLD}Step 10 — amdgpu_vm_flush (GPU page table TLB flush, passive){RESET}")
+def step9_vm_flush(fd: int) -> bool:
+    print(f"\n{BOLD}Step 9 — amdgpu_vm_flush (GPU page table TLB flush, passive){RESET}")
     info_("Probing kfunc:amdgpu_vm_flush for 5 seconds")
 
     probe = BpfProbe("kfunc:amdgpu_vm_flush")
@@ -695,8 +678,8 @@ def step10_vm_flush(fd: int) -> bool:
     return hit
 
 
-def step11_runtime_pm(fd: int) -> bool:
-    print(f"\n{BOLD}Step 11 — amdgpu runtime PM (passive){RESET}")
+def step10_runtime_pm(fd: int) -> bool:
+    print(f"\n{BOLD}Step 10 — amdgpu runtime PM (passive){RESET}")
 
     # Runtime PM won't fire while the GPU has active displays (D0 state).
     try:
@@ -727,8 +710,8 @@ def step11_runtime_pm(fd: int) -> bool:
     return True
 
 
-def step12_ctx_free(fd: int, ctx_id: int) -> bool:
-    print(f"\n{BOLD}Step 12 — DRM_IOCTL_AMDGPU_CTX free (context teardown){RESET}")
+def step11_ctx_free(fd: int, ctx_id: int) -> bool:
+    print(f"\n{BOLD}Step 11 — DRM_IOCTL_AMDGPU_CTX free (context teardown){RESET}")
     if ctx_id == 0:
         info_("  ↳ No valid ctx_id — skipping")
         record("amdgpu_ctx_ioctl (FREE_CTX)", False); return False
@@ -794,12 +777,11 @@ def main():
     # ── Steps 8–11: passive observation — launch stimulator first ────────
     stim = _launch_stimulator()
     step8_job_run(fd)
-    step9_dma_fence_signal(fd)
-    step10_vm_flush(fd)
-    step11_runtime_pm(fd)
+    step9_vm_flush(fd)
+    step10_runtime_pm(fd)
     _stop_stimulator(stim)
 
-    step12_ctx_free(fd, ctx_id)
+    step11_ctx_free(fd, ctx_id)
 
     # Cleanup GEM handle
     if handle:

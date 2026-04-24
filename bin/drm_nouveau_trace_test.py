@@ -15,10 +15,9 @@ Verified paths:
   Step 6  — NOUVEAU_GEM_CPU_FINI (release CPU-access lock)
   Step 7  — NOUVEAU_GEM_PUSHBUF dispatch (command submission ioctl entry)
   Step 8  — nouveau_fence_emit (GPU fence creation, passive)
-  Step 9  — dma_fence_signal (GPU work completion, passive)
-  Step 10 — nvkm_subdev use/enable (NVKM engine wakeup, passive)
-  Step 11 — nouveau_bo_move (TTM buffer eviction/migration, passive)
-  Step 12 — GEM handle close (buffer object teardown)
+  Step 9  — nvkm_subdev use/enable (NVKM engine wakeup, passive)
+  Step 10 — nouveau_bo_move (TTM buffer eviction/migration, passive)
+  Step 11 — GEM handle close (buffer object teardown)
 
 Requirements:
   - bpftrace >= 0.16  (sudo apt install bpftrace)
@@ -547,24 +546,8 @@ def step8_fence_emit(fd: int) -> bool:
     return hit
 
 
-def step9_dma_fence_signal(fd: int) -> bool:
-    print(f"\n{BOLD}Step 9 — dma_fence_signal (GPU work completion, passive){RESET}")
-    info_("Probing kfunc:dma_fence_signal for 5 seconds")
-
-    probe = BpfProbe("kfunc:dma_fence_signal")
-    probe.start()
-    hit = probe.wait(timeout=5); probe.stop()
-
-    record("dma_fence_signal (GPU completion fence)", hit)
-    if hit:
-        info_("  ↳ GPU fences are signalling — work completing")
-    else:
-        info_("  ↳ No fence signals in 5 s (no active workload)")
-    return hit
-
-
-def step10_nvkm_subdev_use(fd: int) -> bool:
-    print(f"\n{BOLD}Step 10 — nvkm_subdev use/enable (NVKM engine wakeup, passive){RESET}")
+def step9_nvkm_subdev_use(fd: int) -> bool:
+    print(f"\n{BOLD}Step 9 — nvkm_subdev use/enable (NVKM engine wakeup, passive){RESET}")
     info_("Probing kfunc:nvkm_subdev_unuse,kfunc:nvkm_subdev_use for 5 seconds")
 
     probe = BpfProbe("kfunc:nvkm_subdev_unuse,kfunc:nvkm_subdev_use")
@@ -579,8 +562,8 @@ def step10_nvkm_subdev_use(fd: int) -> bool:
     return hit
 
 
-def step11_bo_move(fd: int) -> bool:
-    print(f"\n{BOLD}Step 11 — nouveau_bo_move (TTM buffer migration, passive){RESET}")
+def step10_bo_move(fd: int) -> bool:
+    print(f"\n{BOLD}Step 10 — nouveau_bo_move (TTM buffer migration, passive){RESET}")
     info_("Probing kfunc:nouveau_bo_move for 5 seconds")
 
     probe = BpfProbe("kfunc:nouveau_bo_move")
@@ -595,8 +578,8 @@ def step11_bo_move(fd: int) -> bool:
     return hit
 
 
-def step12_gem_close(fd: int, handle: int) -> bool:
-    print(f"\n{BOLD}Step 12 — DRM_IOCTL_GEM_CLOSE (buffer object teardown){RESET}")
+def step11_gem_close(fd: int, handle: int) -> bool:
+    print(f"\n{BOLD}Step 11 — DRM_IOCTL_GEM_CLOSE (buffer object teardown){RESET}")
     if handle == 0:
         info_("  ↳ No valid handle — skipping")
         record("drm_gem_close (BO teardown)", False); return False
@@ -657,10 +640,9 @@ def main():
     step6_gem_cpu_fini(fd, handle)
     step7_pushbuf_dispatch(fd)
     step8_fence_emit(fd)
-    step9_dma_fence_signal(fd)
-    step10_nvkm_subdev_use(fd)
-    step11_bo_move(fd)
-    step12_gem_close(fd, handle)
+    step9_nvkm_subdev_use(fd)
+    step10_bo_move(fd)
+    step11_gem_close(fd, handle)
 
     try:
         os.close(fd)

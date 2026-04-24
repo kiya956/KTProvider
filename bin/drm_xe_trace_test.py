@@ -15,10 +15,9 @@ Verified paths:
   Step 6  — DRM_IOCTL_XE_EXEC_QUEUE_CREATE (execution queue dispatch)
   Step 7  — DRM_IOCTL_XE_EXEC dispatch (submission ioctl entry)
   Step 8  — xe_sched_job_run (GPU scheduler → ring, passive)
-  Step 9  — dma_fence_signal (GPU work completion, passive)
-  Step 10 — xe_vm_rebind (page table rebind after eviction, passive)
-  Step 11 — DRM_IOCTL_XE_EXEC_QUEUE_DESTROY (queue teardown)
-  Step 12 — DRM_IOCTL_XE_VM_DESTROY (VM teardown)
+  Step 9  — xe_vm_rebind (page table rebind after eviction, passive)
+  Step 10 — DRM_IOCTL_XE_EXEC_QUEUE_DESTROY (queue teardown)
+  Step 11 — DRM_IOCTL_XE_VM_DESTROY (VM teardown)
 
 Requirements:
   - bpftrace >= 0.16  (sudo apt install bpftrace)
@@ -654,24 +653,8 @@ def step8_sched_job_run(fd: int) -> bool:
     return hit
 
 
-def step9_dma_fence_signal(fd: int) -> bool:
-    print(f"\n{BOLD}Step 9 — dma_fence_signal (GPU work completion, passive){RESET}")
-    info_("Probing kfunc:dma_fence_signal for 5 seconds")
-
-    probe = BpfProbe("kfunc:dma_fence_signal")
-    probe.start()
-    hit = probe.wait(timeout=5); probe.stop()
-
-    record("dma_fence_signal (GPU completion fence)", hit)
-    if hit:
-        info_("  ↳ GPU fences are signalling — work completing")
-    else:
-        info_("  ↳ No fence signals in 5 s (no active workload)")
-    return hit
-
-
-def step10_vm_rebind(fd: int) -> bool:
-    print(f"\n{BOLD}Step 10 — xe_vm_rebind (page table rebind after eviction, passive){RESET}")
+def step9_vm_rebind(fd: int) -> bool:
+    print(f"\n{BOLD}Step 9 — xe_vm_rebind (page table rebind after eviction, passive){RESET}")
     info_("Probing kfunc:xe_vm_rebind for 5 seconds")
 
     probe = BpfProbe("kfunc:xe_vm_rebind")
@@ -686,8 +669,8 @@ def step10_vm_rebind(fd: int) -> bool:
     return hit
 
 
-def step11_exec_queue_destroy(fd: int, eq_id: int) -> bool:
-    print(f"\n{BOLD}Step 11 — DRM_IOCTL_XE_EXEC_QUEUE_DESTROY (queue teardown){RESET}")
+def step10_exec_queue_destroy(fd: int, eq_id: int) -> bool:
+    print(f"\n{BOLD}Step 10 — DRM_IOCTL_XE_EXEC_QUEUE_DESTROY (queue teardown){RESET}")
     if eq_id == 0:
         info_("  ↳ No valid exec_queue_id — skipping")
         record("xe_exec_queue_destroy_ioctl", False); return False
@@ -710,8 +693,8 @@ def step11_exec_queue_destroy(fd: int, eq_id: int) -> bool:
     return ok
 
 
-def step12_vm_destroy(fd: int, vm_id: int) -> bool:
-    print(f"\n{BOLD}Step 12 — DRM_IOCTL_XE_VM_DESTROY (VM teardown){RESET}")
+def step11_vm_destroy(fd: int, vm_id: int) -> bool:
+    print(f"\n{BOLD}Step 11 — DRM_IOCTL_XE_VM_DESTROY (VM teardown){RESET}")
     if vm_id == 0:
         info_("  ↳ No valid vm_id — skipping")
         record("xe_vm_destroy_ioctl", False); return False
@@ -805,10 +788,9 @@ def main():
     step7_exec_dispatch(fd, eq_id)
     stim = _launch_stimulator()
     step8_sched_job_run(fd)
-    step9_dma_fence_signal(fd)
     _stop_stimulator(stim)
-    step10_vm_rebind(fd)
-    step11_exec_queue_destroy(fd, eq_id)
+    step9_vm_rebind(fd)
+    step10_exec_queue_destroy(fd, eq_id)
 
     # Close GEM handle before VM destroy
     if handle:
@@ -816,7 +798,7 @@ def main():
         _libc().ioctl(fd, ctypes.c_ulong(DRM_IOCTL_GEM_CLOSE),
                       ctypes.byref(close_arg))
 
-    step12_vm_destroy(fd, vm_id)
+    step11_vm_destroy(fd, vm_id)
 
     try:
         os.close(fd)

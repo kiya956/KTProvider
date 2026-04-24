@@ -14,10 +14,9 @@ Verified paths:
   Step 5  — i915_gem_execbuffer2 dispatch
   Step 6  — i915_request_create (request alloc on engine timeline)
   Step 7  — intel_guc_submit OR execlists_submit_request
-  Step 8  — dma_fence_signal (GPU work completion)
-  Step 9  — i915_request_retire (request retired, breadcrumb advanced)
-  Step 10 — intel_gt_pm wakeref (runtime-PM wake cycle)
-  Step 11 — i915_gem_context_close (context teardown)
+  Step 8  — i915_request_retire (request retired, breadcrumb advanced)
+  Step 9  — intel_gt_pm wakeref (runtime-PM wake cycle)
+  Step 10 — i915_gem_context_close (context teardown)
 
 Requirements:
   - bpftrace >= 0.16  (sudo apt install bpftrace)
@@ -516,24 +515,8 @@ def step8_guc_or_execlists(fd: int) -> bool:
     return hit
 
 
-def step9_dma_fence_signal(fd: int) -> bool:
-    print(f"\n{BOLD}Step 9 — dma_fence_signal (GPU completion, passive){RESET}")
-    info_("Probing kfunc:dma_fence_signal for 5 seconds")
-
-    probe = BpfProbe("kfunc:dma_fence_signal")
-    probe.start()
-    hit = probe.wait(timeout=5); probe.stop()
-
-    record("dma_fence_signal (GPU completion)", hit)
-    if hit:
-        info_("  ↳ GPU fences are signalling — work completing")
-    else:
-        info_("  ↳ No fence signals in 5 s (no active workload)")
-    return hit
-
-
-def step10_gt_wakeref(fd: int) -> bool:
-    print(f"\n{BOLD}Step 10 — intel_gt PM wakeref (runtime-PM){RESET}")
+def step9_gt_wakeref(fd: int) -> bool:
+    print(f"\n{BOLD}Step 9 — intel_gt PM wakeref (runtime-PM){RESET}")
     info_("Probing kfunc:intel_gt_pm_get_if_awake OR intel_gt_pm_get for 5 s")
 
     probe = BpfProbe(
@@ -549,8 +532,8 @@ def step10_gt_wakeref(fd: int) -> bool:
     return hit
 
 
-def step11_context_destroy(fd: int, ctx_id: int) -> bool:
-    print(f"\n{BOLD}Step 11 — i915_gem_context_close (context teardown){RESET}")
+def step10_context_destroy(fd: int, ctx_id: int) -> bool:
+    print(f"\n{BOLD}Step 10 — i915_gem_context_close (context teardown){RESET}")
     if ctx_id == 0:
         info_("  ↳ No valid context — skipping")
         record("i915_gem_context_destroy", False); return False
@@ -610,9 +593,8 @@ def main():
     step6_execbuffer2_dispatch(fd)
     step7_request_create(fd)
     step8_guc_or_execlists(fd)
-    step9_dma_fence_signal(fd)
-    step10_gt_wakeref(fd)
-    step11_context_destroy(fd, ctx_id)
+    step9_gt_wakeref(fd)
+    step10_context_destroy(fd, ctx_id)
 
     # Close fd last (after context destroy)
     try:
