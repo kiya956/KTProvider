@@ -116,4 +116,5 @@ user: root
 estimated_duration: 120.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
+ grep -qE '^(hdlcd|malidp|komeda) ' /proc/modules || { echo "No ARM display module loaded (hdlcd/malidp/komeda) — skipping"; exit 1; }
  drm_arm_trace_test.py
