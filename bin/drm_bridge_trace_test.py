@@ -109,6 +109,58 @@ def check_drm_present():
     return False
 
 
+def detect_drm_bridges() -> bool:
+    """Return True if at least one DRM display bridge is registered.
+
+    Checks debugfs bridge list and sysfs for bridge-related encoders.
+    """
+    # Method 1: debugfs bridge list (most reliable when available)
+    bridge_file = "/sys/kernel/debug/dri/bridge_list"
+    if os.path.isfile(bridge_file):
+        try:
+            with open(bridge_file) as f:
+                content = f.read().strip()
+            if content:
+                print(f"  DRM bridges detected via debugfs ({len(content.splitlines())} entries)")
+                return True
+        except PermissionError:
+            pass
+
+    # Method 2: look for drm_bridge entries via debugfs per-device
+    for card_debug in glob.glob("/sys/kernel/debug/dri/*/"):
+        for name in ("bridge", "bridges"):
+            path = os.path.join(card_debug, name)
+            if os.path.exists(path):
+                try:
+                    with open(path) as f:
+                        content = f.read().strip()
+                    if content:
+                        print(f"  DRM bridge info found in {path}")
+                        return True
+                except (PermissionError, IsADirectoryError):
+                    pass
+
+    # Method 3: check if any known DRM bridge modules are loaded
+    drm_bridge_modules = {
+        "analogix_dp", "anx7625", "cadence_dsi", "cdns_mhdp",
+        "cros_ec_anx7688", "display_connector", "dw_hdmi", "dw_mipi_dsi",
+        "lontium_lt9611", "megachips", "nwl_dsi", "parade_ps8640",
+        "ptn3460", "sii902x", "simple_bridge", "tc358767", "tc358768",
+        "ti_sn65dsi86", "ti_tfp410",
+    }
+    try:
+        with open("/proc/modules") as f:
+            loaded = {line.split()[0] for line in f}
+        found = loaded & drm_bridge_modules
+        if found:
+            print(f"  DRM bridge modules loaded: {found}")
+            return True
+    except OSError:
+        pass
+
+    return False
+
+
 def run_bpftrace(script: str, timeout_sec: int = 30) -> set[str]:
     """Run bpftrace and collect hit events, return set of hit symbol names."""
     proc = subprocess.Popen(
@@ -142,7 +194,8 @@ def run_bpftrace(script: str, timeout_sec: int = 30) -> set[str]:
     return hits
 
 
-def print_results(hits: set, resolved: dict) -> None:
+def print_results(hits: set, resolved: dict) -> bool:
+    """Print results table. Returns True if all observable steps passed."""
     print("\n" + "=" * 60)
     print("DRM Bridge Subsystem – Test Results")
     print("=" * 60)
@@ -165,6 +218,7 @@ def print_results(hits: set, resolved: dict) -> None:
     else:
         print(f"  Overall: [{FAIL}] Some steps not observed (see notes above)")
     print()
+    return all_pass
 
 
 def trigger_hints():
@@ -199,11 +253,19 @@ def main():
         print_results(set(), resolved)
         return
 
+    # Skip early if no DRM display bridge hardware is present
+    if not detect_drm_bridges():
+        print(f"\n[{SKIP}] No DRM display bridges detected on this system")
+        print("  (bridge test is not applicable without bridge hardware)\n")
+        return
+
     trigger_hints()
 
     script = build_bpftrace_script(resolved)
     hits = run_bpftrace(script, timeout_sec=30)
-    print_results(hits, resolved)
+    all_pass = print_results(hits, resolved)
+    if not all_pass:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
