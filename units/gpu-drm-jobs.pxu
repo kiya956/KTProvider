@@ -1,20 +1,8 @@
-unit: job
-id: kprovider_drm_module
-plugin: resource
-_summary: Enumerate loaded DRM-related kernel modules
-command:
- for mod in i915 xe amdgpu nouveau hdlcd malidp komeda; do
-   if grep -q "^${mod} " /proc/modules 2>/dev/null; then
-     echo "name: $mod"
-     echo ""
-   fi
- done
-
 unit: category
-id: kprovider/drm
+id: kprovider/gpu/drm
 _name: DRM GPU Drivers
 
-id: kprovider/drm/core
+id: kprovider/gpu/drm/core
 _summary: DRM core subsystem bpftrace workflow verification
 _description:
  Traces the DRM ioctl/GEM/vblank/atomic pipeline using bpftrace kfunc probes.
@@ -22,14 +10,14 @@ _description:
  KMS mode resources, drm_read event queue, drm_release, vblank, and
  dma_fence_signal. Works on any driver that exposes /dev/dri/card0.
 plugin: shell
-category_id: kprovider/drm
+category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 120.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- drm_core_trace_test.py
+ gpu_drm_core_trace_test.py
 
-id: kprovider/drm/i915
+id: kprovider/gpu/drm/i915
 _summary: Intel i915 GPU driver bpftrace workflow verification
 _description:
  Traces the i915 submission pipeline using bpftrace kfunc probes.
@@ -38,15 +26,15 @@ _description:
  request retire, GT PM wakeref, and context teardown.
  Requires an Intel GPU with the i915 module loaded.
 plugin: shell
-category_id: kprovider/drm
-requires: kprovider_drm_module.name == 'i915'
+category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- drm_i915_trace_test.py
+ grep -q '^i915 ' /proc/modules || { echo "i915 module not loaded — skipping"; exit 0; }
+ gpu_drm_i915_trace_test.py
 
-id: kprovider/drm/amd
+id: kprovider/gpu/drm/amd
 _summary: AMD amdgpu driver bpftrace workflow verification
 _description:
  Traces the amdgpu submission pipeline using bpftrace kfunc probes.
@@ -55,15 +43,15 @@ _description:
  dma_fence_signal, vm_flush, runtime PM, and CTX teardown.
  Requires an AMD GPU with the amdgpu module loaded.
 plugin: shell
-category_id: kprovider/drm
-requires: kprovider_drm_module.name == 'amdgpu'
+category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- drm_amd_trace_test.py
+ grep -q '^amdgpu ' /proc/modules || { echo "amdgpu module not loaded — skipping"; exit 0; }
+ gpu_drm_amd_trace_test.py
 
-id: kprovider/drm/nouveau
+id: kprovider/gpu/drm/nouveau
 _summary: Nouveau (NVIDIA) GPU driver bpftrace workflow verification
 _description:
  Traces the nouveau submission pipeline using bpftrace kfunc probes.
@@ -72,15 +60,15 @@ _description:
  dma_fence_signal, nvkm_subdev wakeup, bo_move, and GEM close.
  Requires an NVIDIA GPU with the nouveau module loaded.
 plugin: shell
-category_id: kprovider/drm
-requires: kprovider_drm_module.name == 'nouveau'
+category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- drm_nouveau_trace_test.py
+ grep -q '^nouveau ' /proc/modules || { echo "nouveau module not loaded — skipping"; exit 0; }
+ gpu_drm_nouveau_trace_test.py
 
-id: kprovider/drm/xe
+id: kprovider/gpu/drm/xe
 _summary: Intel Xe GPU driver bpftrace workflow verification
 _description:
  Traces the Xe driver submission pipeline using bpftrace kfunc probes.
@@ -89,15 +77,15 @@ _description:
  dma_fence_signal, vm_rebind, and queue/VM teardown.
  Requires an Intel GPU with the xe module loaded (kernel >= 6.8).
 plugin: shell
-category_id: kprovider/drm
-requires: kprovider_drm_module.name == 'xe'
+category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- drm_xe_trace_test.py
+ grep -q '^xe ' /proc/modules || { echo "xe module not loaded — skipping"; exit 0; }
+ gpu_drm_xe_trace_test.py
 
-id: kprovider/drm/bridge
+id: kprovider/gpu/drm/bridge
 _summary: DRM bridge subsystem bpftrace workflow verification
 _description:
  Traces the DRM bridge chain lifecycle using bpftrace kprobe probes.
@@ -106,14 +94,14 @@ _description:
  and bridge_remove.
  Requires a DRM device with an active display bridge (e.g. DSI->HDMI).
 plugin: shell
-category_id: kprovider/drm
+category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 120.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- drm_bridge_trace_test.py
+ gpu_drm_bridge_trace_test.py
 
-id: kprovider/drm/arm
+id: kprovider/gpu/drm/arm
 _summary: ARM DRM display driver bpftrace workflow verification
 _description:
  Traces ARM display engines (HDLCD, Mali-DP, Komeda) using bpftrace
@@ -123,10 +111,10 @@ _description:
  drm_dev_unregister.
  Requires an ARM SoC or QEMU with ARM display hardware.
 plugin: shell
-category_id: kprovider/drm
-requires: kprovider_drm_module.name in ('hdlcd', 'malidp', 'komeda')
+category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 120.0
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- drm_arm_trace_test.py
+ grep -q '^hdlcd \|^malidp \|^komeda ' /proc/modules || { echo "ARM display module not loaded — skipping"; exit 0; }
+ gpu_drm_arm_trace_test.py
