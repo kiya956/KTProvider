@@ -11,6 +11,7 @@ include:
  kprovider/gpu/drm/xe
  kprovider/gpu/drm/bridge
  kprovider/gpu/drm/arm
+ kprovider/gpu/drm/nvidia-drm
 
 unit: test plan
 id: kprovider-gpu-drm
@@ -24,3 +25,4 @@ include:
  kprovider/gpu/drm/xe
  kprovider/gpu/drm/bridge
  kprovider/gpu/drm/arm
+ kprovider/gpu/drm/nvidia-drm

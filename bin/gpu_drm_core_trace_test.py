@@ -565,7 +565,7 @@ def step10_dma_fence(dev_path: str) -> bool:
     probe_expr = find_probe("dma_fence_signal")
     if probe_expr is None:
         info_("dma_fence_signal not available — skipping")
-        record("dma_fence_signal (GPU sync)", True)
+        record("dma_fence_signal (GPU sync, passive)", True)
         return True
 
     info_(f"Probing {probe_expr}  for 5 seconds")
@@ -574,7 +574,7 @@ def step10_dma_fence(dev_path: str) -> bool:
     hit = probe.wait(timeout=5)
     probe.stop()
 
-    record("dma_fence_signal (GPU sync)", hit)
+    record("dma_fence_signal (GPU sync, passive)", hit)
     if hit:
         info_("  ↳ dma_fence_signal() observed — GPU work completing")
     else:
