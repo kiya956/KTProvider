@@ -411,14 +411,16 @@ def step4_gem_create(fd: int, dev_path: str) -> tuple[bool, int]:
     hit = probe.wait()
     probe.stop()
 
-    ok = (ret == 0) and hit
     handle = dumb.handle if ret == 0 else 0
-    record("drm_gem_object_init (CREATE_DUMB)", ok)
-    if ret == 0:
-        info_(f"  ↳ handle={handle}  pitch={dumb.pitch}  size={dumb.size}")
+    if ret != 0:
+        # Driver doesn't support dumb buffers (e.g. nvidia-drm) — expected
+        info_(f"  ↳ CREATE_DUMB ioctl returned {ret} (driver does not support dumb buffers)")
+        record("drm_gem_object_init (no dumb buffer support, passive)", False)
     else:
-        info_(f"  ↳ CREATE_DUMB ioctl returned {ret} (driver may not support dumb buffers)")
-    return ok, handle
+        ok = hit
+        record("drm_gem_object_init (CREATE_DUMB)", ok)
+        info_(f"  ↳ handle={handle}  pitch={dumb.pitch}  size={dumb.size}")
+    return ret == 0, handle
 
 
 # ── Step 5: GEM handle table (per-file IDR) ───────────────────────────────────
@@ -429,7 +431,7 @@ def step5_gem_handle(fd: int, handle: int) -> bool:
 
     if handle == 0:
         info_("  ↳ No valid handle from step 4 — skipping")
-        record("drm_gem_handle_create (IDR)", False)
+        record("drm_gem_handle_delete (no dumb buffer support, passive)", False)
         return False
 
     probe = BpfProbe("kfunc:drm_gem_handle_delete")
@@ -586,17 +588,46 @@ def step10_dma_fence(dev_path: str) -> bool:
 # Stimulator helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _detect_display_env():
+    """Detect DISPLAY and XAUTHORITY for the active graphical session."""
+    import glob as _glob
+    env = {}
+    # X11
+    x11_socks = sorted(_glob.glob("/tmp/.X11-unix/X*"))
+    if x11_socks:
+        display_num = os.path.basename(x11_socks[0]).lstrip("X")
+        env["DISPLAY"] = f":{display_num}"
+        for pattern in ["/run/user/*/gdm/Xauthority",
+                        "/home/*/.Xauthority", "/root/.Xauthority"]:
+            matches = sorted(_glob.glob(pattern))
+            if matches and os.path.isfile(matches[0]):
+                env["XAUTHORITY"] = matches[0]
+                break
+    # Wayland
+    for pattern in ["/run/user/*/wayland-*"]:
+        candidates = [s for s in sorted(_glob.glob(pattern))
+                      if not s.endswith(".lock")]
+        if candidates:
+            env["XDG_RUNTIME_DIR"] = os.path.dirname(candidates[0])
+            env["WAYLAND_DISPLAY"] = os.path.basename(candidates[0])
+            break
+    return env
+
+
 def _launch_stimulator():
     """Launch drm_stimulate.py in background to generate GPU/display activity."""
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drm_stimulate.py")
     if not os.path.exists(script):
         return None
     try:
+        launch_env = os.environ.copy()
+        launch_env.update(_detect_display_env())
         proc = subprocess.Popen(
             [sys.executable, script],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env=launch_env,
         )
-        time.sleep(3)   # pygame init + Xe VM/GEM/bind setup
+        time.sleep(3)
         if proc.poll() is not None:
             out = proc.stdout.read().decode(errors="replace")
             print(f"  [INFO] Stimulator exited early:\n{out}", flush=True)
