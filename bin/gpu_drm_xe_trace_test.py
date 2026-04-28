@@ -718,39 +718,6 @@ def step11_vm_destroy(fd: int, vm_id: int) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Stimulator helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _launch_stimulator():
-    """Launch drm_stimulate.py in background to generate GPU/display activity."""
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drm_stimulate.py")
-    if not os.path.exists(script):
-        return None
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, script],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        )
-        time.sleep(3)   # pygame init + Xe VM/GEM/bind setup
-        if proc.poll() is not None:
-            out = proc.stdout.read().decode(errors="replace")
-            print(f"  [INFO] Stimulator exited early:\n{out}", flush=True)
-            return None
-        return proc
-    except Exception as e:
-        print(f"  [INFO] Stimulator launch failed: {e}", flush=True)
-        return None
-
-def _stop_stimulator(proc):
-    if proc and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -786,9 +753,7 @@ def main():
     step5_gem_mmap_offset(fd, handle)
     eq_id  = step6_exec_queue_create(fd, vm_id)
     step7_exec_dispatch(fd, eq_id)
-    stim = _launch_stimulator()
     step8_sched_job_run(fd)
-    _stop_stimulator(stim)
     step9_vm_rebind(fd)
     step10_exec_queue_destroy(fd, eq_id)
 
