@@ -118,3 +118,19 @@ command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
  grep -q '^hdlcd \|^malidp \|^komeda ' /proc/modules || { echo "ARM display module not loaded — skipping"; exit 0; }
  gpu_drm_arm_trace_test.py
+
+id: kprovider/gpu/drm/nvidia-drm
+_summary: NVIDIA proprietary DRM driver bpftrace workflow verification
+_description:
+ Traces the nvidia-drm kernel module lifecycle using bpftrace kprobe probes.
+ Covers: device probe, GEM object init, atomic commit, CRTC enable,
+ fence signalling, page flip, modeset, and cleanup.
+ Requires NVIDIA proprietary driver with nvidia-drm module loaded.
+plugin: shell
+category_id: kprovider/gpu/drm
+user: root
+estimated_duration: 180.0
+command:
+ command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
+ grep -q '^nvidia_drm ' /proc/modules || { echo "nvidia_drm module not loaded — skipping"; exit 0; }
+ gpu_drm_nvidia_drm_trace_test.py
