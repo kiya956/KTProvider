@@ -806,9 +806,14 @@ def main():
         pass
 
     # ── Summary ───────────────────────────────────────────────────────────────
+    PASSIVE_TAGS = {"passive"}
     print(f"\n{BOLD}══════════════════════ Results ══════════════════════{RESET}")
     passed = sum(1 for _, ok in RESULTS if ok)
     total  = len(RESULTS)
+    active_failures = sum(
+        1 for name, ok in RESULTS
+        if not ok and not any(t in name.lower() for t in PASSIVE_TAGS)
+    )
     for name, ok in RESULTS:
         status = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"
         print(f"  [{status}] {name}")
@@ -816,8 +821,11 @@ def main():
     print(f"\n  Score: {passed}/{total}")
     if passed == total:
         print(f"  {GREEN}{BOLD}All steps passed!{RESET}")
+    elif active_failures == 0:
+        print(f"  {GREEN}{BOLD}All active steps passed!{RESET}")
+        print(f"  {total - passed} passive step(s) failed (expected on idle system)")
     else:
-        print(f"  {RED}{BOLD}{total - passed} step(s) failed.{RESET}")
+        print(f"  {RED}{BOLD}{active_failures} active step(s) failed.{RESET}")
         print("""
   Common failure reasons:
     • Not a Xe GPU (driver != "xe") → steps 2-12 will fail
@@ -830,7 +838,7 @@ def main():
     • Passive steps (8-10): idle system → expected FAIL for no-workload
     • Step 10 xe_vm_rebind: only fires under memory pressure or migrations
 """)
-    sys.exit(0 if passed == total else 1)
+    sys.exit(1 if active_failures > 0 else 0)
 
 
 if __name__ == "__main__":
