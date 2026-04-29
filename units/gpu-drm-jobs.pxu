@@ -2,6 +2,31 @@ unit: category
 id: kprovider/gpu/drm
 _name: DRM GPU Drivers
 
+id: drm_gpu_modules
+_summary: Detect loaded GPU kernel modules
+_description: Resource job that reports which GPU driver modules are loaded
+plugin: resource
+category_id: kprovider/gpu/drm
+estimated_duration: 1.0
+command:
+ for mod in i915 amdgpu nouveau xe nvidia_drm; do
+  if grep -q "^${mod} " /proc/modules 2>/dev/null; then
+   echo "module: ${mod}"
+   echo ""
+  fi
+ done
+ for mod in hdlcd malidp komeda; do
+  if grep -q "^${mod} " /proc/modules 2>/dev/null; then
+   echo "module: arm_display"
+   echo ""
+   break
+  fi
+ done
+ if [ -d /sys/kernel/debug/dri ] && ls /sys/kernel/debug/dri/*/bridge 2>/dev/null | grep -q .; then
+  echo "module: drm_bridge"
+  echo ""
+ fi
+
 id: kprovider/gpu/drm/core
 _summary: DRM core subsystem bpftrace workflow verification
 _description:
@@ -29,9 +54,9 @@ plugin: shell
 category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
+requires: drm_gpu_modules.module == 'i915'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^i915 ' /proc/modules || { echo "i915 module not loaded — skipping"; exit 0; }
  gpu_drm_i915_trace_test.py
 
 id: kprovider/gpu/drm/amd
@@ -46,9 +71,9 @@ plugin: shell
 category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
+requires: drm_gpu_modules.module == 'amdgpu'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^amdgpu ' /proc/modules || { echo "amdgpu module not loaded — skipping"; exit 0; }
  gpu_drm_amd_trace_test.py
 
 id: kprovider/gpu/drm/nouveau
@@ -63,9 +88,9 @@ plugin: shell
 category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
+requires: drm_gpu_modules.module == 'nouveau'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^nouveau ' /proc/modules || { echo "nouveau module not loaded — skipping"; exit 0; }
  gpu_drm_nouveau_trace_test.py
 
 id: kprovider/gpu/drm/xe
@@ -80,9 +105,9 @@ plugin: shell
 category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
+requires: drm_gpu_modules.module == 'xe'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^xe ' /proc/modules || { echo "xe module not loaded — skipping"; exit 0; }
  gpu_drm_xe_trace_test.py
 
 id: kprovider/gpu/drm/bridge
@@ -97,6 +122,7 @@ plugin: shell
 category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 120.0
+requires: drm_gpu_modules.module == 'drm_bridge'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
  gpu_drm_bridge_trace_test.py
@@ -114,9 +140,9 @@ plugin: shell
 category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 120.0
+requires: drm_gpu_modules.module == 'arm_display'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^hdlcd \|^malidp \|^komeda ' /proc/modules || { echo "ARM display module not loaded — skipping"; exit 0; }
  gpu_drm_arm_trace_test.py
 
 id: kprovider/gpu/drm/nvidia-drm
@@ -130,7 +156,7 @@ plugin: shell
 category_id: kprovider/gpu/drm
 user: root
 estimated_duration: 180.0
+requires: drm_gpu_modules.module == 'nvidia_drm'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
- grep -q '^nvidia_drm ' /proc/modules || { echo "nvidia_drm module not loaded — skipping"; exit 0; }
  gpu_drm_nvidia_drm_trace_test.py

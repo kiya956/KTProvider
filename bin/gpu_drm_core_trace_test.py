@@ -260,11 +260,17 @@ def ioctl(fd, request, arg):
 # Test Steps
 # ──────────────────────────────────────────────────────────────────────────────
 
-RESULTS: list[tuple[str, bool]] = []
+RESULTS: list[tuple[str, bool | None]] = []
 
-def record(name: str, ok: bool):
+def record(name: str, ok: bool | None):
+    """Record a step result. ok=True/False for PASS/FAIL, None for N/A."""
     RESULTS.append((name, ok))
-    (pass_ if ok else fail_)(name)
+    if ok is None:
+        pass  # N/A — already printed by the step
+    elif ok:
+        pass_(name)
+    else:
+        fail_(name)
 
 
 # ── Step 0: Prerequisites ─────────────────────────────────────────────────────
@@ -415,7 +421,7 @@ def step4_gem_create(fd: int, dev_path: str) -> tuple[bool, int]:
     if ret != 0:
         # Driver doesn't support dumb buffers (e.g. nvidia-drm) — expected
         info_(f"  ↳ CREATE_DUMB ioctl returned {ret} (driver does not support dumb buffers)")
-        record("drm_gem_object_init (no dumb buffer support, passive)", False)
+        record("drm_gem_object_init (no dumb buffer support)", False)
     else:
         ok = hit
         record("drm_gem_object_init (CREATE_DUMB)", ok)
@@ -431,7 +437,7 @@ def step5_gem_handle(fd: int, handle: int) -> bool:
 
     if handle == 0:
         info_("  ↳ No valid handle from step 4 — skipping")
-        record("drm_gem_handle_delete (no dumb buffer support, passive)", False)
+        record("drm_gem_handle_delete (no dumb buffer support)", False)
         return False
 
     probe = BpfProbe("kfunc:drm_gem_handle_delete")
@@ -451,7 +457,7 @@ def step5_gem_handle(fd: int, handle: int) -> bool:
 
 # ── Step 6: Mode resource enumeration (KMS) ───────────────────────────────────
 
-def step6_mode_resources(fd: int) -> bool:
+def step6_mode_resources(fd: int) -> tuple[bool, int]:
     print(f"\n{BOLD}Step 6 — drm_mode_getresources() (KMS object enumeration){RESET}")
     info_("Probing kernel:drm_mode_getresources")
 
@@ -464,13 +470,14 @@ def step6_mode_resources(fd: int) -> bool:
     probe.stop()
 
     ok = hit  # may return -EINVAL on render node, that's fine
+    crtc_count = res.count_crtcs if ret == 0 else 0
     record("drm_mode_getresources (KMS)", ok)
     if ret == 0:
         info_(f"  ↳ CRTCs={res.count_crtcs}  connectors={res.count_connectors}"
               f"  encoders={res.count_encoders}")
     else:
         info_(f"  ↳ ioctl returned {ret} (expected on render-only node)")
-    return ok
+    return ok, crtc_count
 
 
 # ── Step 7: drm_read / event queue ───────────────────────────────────────────
@@ -523,7 +530,7 @@ def step8_drm_release(fd: int) -> bool:
 # ── Step 9: Vblank path ───────────────────────────────────────────────────────
 
 def step9_vblank(dev_path: str) -> bool:
-    print(f"\n{BOLD}Step 9 — drm_handle_vblank() (passive observation){RESET}")
+    print(f"\n{BOLD}Step 9 — drm_handle_vblank(){RESET}")
 
     # Build ordered list of vblank probe candidates.
     # drm_handle_vblank is the legacy path; Xe (and some modern drivers)
@@ -537,7 +544,7 @@ def step9_vblank(dev_path: str) -> bool:
 
     if not candidates:
         info_("no vblank probe available — skipping")
-        record("drm_handle_vblank (passive)", True)
+        record("drm_handle_vblank", True)
         return True
 
     hit = False
@@ -551,7 +558,7 @@ def step9_vblank(dev_path: str) -> bool:
             break
         info_("  ↳ no events — trying next candidate")
 
-    record("drm_handle_vblank (passive)", hit)
+    record("drm_handle_vblank", hit)
     if hit:
         info_("  ↳ vblank event observed — display is active")
     else:
@@ -567,7 +574,7 @@ def step10_dma_fence(dev_path: str) -> bool:
     probe_expr = find_probe("dma_fence_signal")
     if probe_expr is None:
         info_("dma_fence_signal not available — skipping")
-        record("dma_fence_signal (GPU sync, passive)", True)
+        record("dma_fence_signal (GPU sync)", True)
         return True
 
     info_(f"Probing {probe_expr}  for 5 seconds")
@@ -576,7 +583,7 @@ def step10_dma_fence(dev_path: str) -> bool:
     hit = probe.wait(timeout=5)
     probe.stop()
 
-    record("dma_fence_signal (GPU sync, passive)", hit)
+    record("dma_fence_signal (GPU sync)", hit)
     if hit:
         info_("  ↳ dma_fence_signal() observed — GPU work completing")
     else:
@@ -685,50 +692,58 @@ def main():
         step3_get_cap(fd)
         ok4, handle = step4_gem_create(fd, dev)
         step5_gem_handle(fd, handle)
-        step6_mode_resources(fd)
+        _, crtc_count = step6_mode_resources(fd)
         step7_event_read(fd)
         step8_drm_release(fd)  # closes fd
     else:
+        crtc_count = 0
         for name in ["drm_ioctl dispatch", "drm_ioctl_permit", "gem_create",
                      "gem_handle", "mode_resources", "drm_read", "drm_release"]:
             record(name, False)
 
-    # ── Steps 9–10: passive observation — launch stimulator first ────────
+    has_display = crtc_count > 0
+
+    # ── Steps 9–10: launch stimulator to generate GPU/display activity ──
     stim = _launch_stimulator()
-    step9_vblank(dev)
+    if has_display:
+        step9_vblank(dev)
+    else:
+        print(f"\n{BOLD}Step 9 — drm_handle_vblank(){RESET}")
+        info_("N/A — device has 0 CRTCs (render-only), vblank not applicable")
+        record("drm_handle_vblank", None)
     step10_dma_fence(dev)
     _stop_stimulator(stim)
 
     # ── Summary ───────────────────────────────────────────────────────────
-    PASSIVE_TAGS = {"passive"}
     print(f"\n{BOLD}══════════════════════ Results ══════════════════════{RESET}")
-    passed = sum(1 for _, ok in RESULTS if ok)
-    total  = len(RESULTS)
-    active_failures = sum(
-        1 for name, ok in RESULTS
-        if not ok and not any(t in name.lower() for t in PASSIVE_TAGS)
-    )
+    na_count = sum(1 for _, ok in RESULTS if ok is None)
+    passed = sum(1 for _, ok in RESULTS if ok is True)
+    scored = len(RESULTS) - na_count
+    failures = scored - passed
     for name, ok in RESULTS:
-        status = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"
+        if ok is None:
+            status = f"{BOLD}N/A{RESET}"
+        elif ok:
+            status = f"{GREEN}PASS{RESET}"
+        else:
+            status = f"{RED}FAIL{RESET}"
         print(f"  [{status}] {name}")
 
-    print(f"\n  Score: {passed}/{total}")
-    if passed == total:
-        print(f"  {GREEN}{BOLD}All steps passed!{RESET}")
-    elif active_failures == 0:
-        print(f"  {GREEN}{BOLD}All active steps passed!{RESET}")
-        print(f"  {total - passed} passive step(s) failed (expected on idle system)")
+    print(f"\n  Score: {passed}/{scored}")
+    if na_count:
+        print(f"  ({na_count} step(s) excluded — render-only device, no display outputs)")
+    if passed == scored:
+        print(f"  {GREEN}{BOLD}All applicable steps passed!{RESET}")
     else:
-        print(f"  {RED}{BOLD}{active_failures} active step(s) failed — see notes above.{RESET}")
+        print(f"  {RED}{BOLD}{failures} step(s) FAILED — see notes above.{RESET}")
         print("""
   Common failure reasons:
     • bpftrace cannot attach to kfunc: kernel not compiled with BTF
       → check: ls /sys/kernel/btf/vmlinux
     • Driver does not implement dumb buffers → step 4/5 expected
-    • Headless / display-off → vblank step 9 expected
     • No GPU workload → fence step 10 expected
 """)
-    sys.exit(1 if active_failures > 0 else 0)
+    sys.exit(0 if passed == scored else 1)
 
 
 if __name__ == "__main__":

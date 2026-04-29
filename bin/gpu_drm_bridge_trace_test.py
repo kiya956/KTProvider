@@ -257,7 +257,7 @@ def main():
     if not detect_drm_bridges():
         print(f"\n[{SKIP}] No DRM display bridges detected on this system")
         print("  (bridge test is not applicable without bridge hardware)\n")
-        return
+        sys.exit(1)
 
     trigger_hints()
 
