@@ -31,7 +31,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-drv.c",
         "source_line": 2108,
         "exported": False,
-        "passive": True,
+        "role": "generic",
     },
     {
         "step": 2,
@@ -42,7 +42,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-gem.c",
         "source_line": 116,
         "exported": False,
-        "passive": True,
+        "role": "render",
     },
     {
         "step": 3,
@@ -53,7 +53,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-gem.c",
         "source_line": 250,
         "exported": False,
-        "passive": True,
+        "role": "render",
     },
     {
         "step": 4,
@@ -64,7 +64,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-modeset.c",
         "source_line": 514,
         "exported": False,
-        "passive": False,
+        "role": "display",
     },
     {
         "step": 5,
@@ -75,7 +75,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-modeset.c",
         "source_line": 597,
         "exported": False,
-        "passive": True,
+        "role": "display",
     },
     {
         "step": 6,
@@ -86,7 +86,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-modeset.c",
         "source_line": 832,
         "exported": False,
-        "passive": True,
+        "role": "display",
     },
     {
         "step": 7,
@@ -97,7 +97,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-fence.c",
         "source_line": 387,
         "exported": False,
-        "passive": True,
+        "role": "render",
     },
     {
         "step": 8,
@@ -108,7 +108,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-crtc.c",
         "source_line": 2987,
         "exported": False,
-        "passive": True,
+        "role": "display",
     },
     {
         "step": 9,
@@ -119,7 +119,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-drv.c",
         "source_line": 985,
         "exported": False,
-        "passive": True,
+        "role": "generic",
     },
     {
         "step": 10,
@@ -130,7 +130,7 @@ PROBE_TARGETS = [
         "source_file": "drivers/gpu/drm/nvidia-drm/nvidia-drm-drv.c",
         "source_line": 2219,
         "exported": False,
-        "passive": True,
+        "role": "generic",
     },
 ]
 
@@ -226,6 +226,25 @@ def trigger_nvidia_activity():
         pass
 
 
+def detect_nvidia_display_capability() -> bool:
+    """Check if nvidia-drm has display outputs (CRTCs/connectors) via sysfs."""
+    import glob as glib
+    for card_dir in sorted(glib.glob("/sys/class/drm/card[0-9]*")):
+        card_name = os.path.basename(card_dir)
+        driver_link = os.path.join(card_dir, "device", "driver")
+        try:
+            driver = os.path.basename(os.readlink(driver_link))
+        except OSError:
+            continue
+        if "nvidia" not in driver:
+            continue
+        # Check for connector entries (e.g. card0-DP-1, card0-HDMI-A-1)
+        connectors = glib.glob(f"/sys/class/drm/{card_name}-*")
+        if connectors:
+            return True
+    return False
+
+
 def run_test(duration: int = 20):
     print("=" * 60)
     print("nvidia-drm — bpftrace test")
@@ -246,6 +265,12 @@ def run_test(duration: int = 20):
         print("\nWARNING: nvidia-drm module not loaded!")
         print("This test requires NVIDIA proprietary driver with nvidia-drm.ko.")
         print("Install with: sudo apt install nvidia-driver-XXX\n")
+
+    # Detect if this nvidia card has display outputs (CRTCs/connectors)
+    has_display = detect_nvidia_display_capability()
+    print(f"\n  Display capability: {'YES (display+render)' if has_display else 'NO (render-only)'}")
+    if not has_display:
+        print("  → Display-specific steps will be excluded from scoring")
 
     active, skipped = [], []
     for t in PROBE_TARGETS:
@@ -301,41 +326,45 @@ def run_test(duration: int = 20):
     print("FINAL RESULTS")
     print("=" * 60)
     tp = 0
-    active_failures = 0
+    failures = 0
+    na_count = 0
     for t in PROBE_TARGETS:
         s = t["step"]
-        is_passive = t.get("passive", False)
-        tag = " (passive)" if is_passive else ""
+        # Skip display steps on render-only devices
+        if not has_display and t.get("role") == "display":
+            print(f"  Step {s:2d}: {t['name']:35s} N/A (render-only, no display outputs)")
+            na_count += 1
+            continue
         if s in results:
-            st = "PASS ✓" if results[s] else f"FAIL ✗{tag}"
-            tp += results[s]
-            if not results[s] and not is_passive:
-                active_failures += 1
+            if results[s]:
+                st = "PASS ✓"
+                tp += 1
+            else:
+                st = "FAIL ✗"
+                failures += 1
         elif t in [x for x, _ in active]:
-            st = f"FAIL ✗ (no hits){tag}"
-            if not is_passive:
-                active_failures += 1
+            st = "FAIL ✗ (no hits)"
+            failures += 1
         else:
-            st = "SKIP (not in kallsyms)"
+            st = "FAIL ✗ (not in kallsyms)"
+            failures += 1
         print(f"  Step {s:2d}: {t['name']:35s} {st}")
 
-    print(f"\n  Score: {tp}/{len(PROBE_TARGETS)} steps passed")
-    if active_failures == 0:
-        passive_fails = len(PROBE_TARGETS) - tp
-        if passive_fails > 0:
-            print(f"  All active steps passed! {passive_fails} passive step(s) "
-                  f"failed (expected — require specific GPU activity)")
-        else:
-            print("  All steps passed!")
+    scored = len(PROBE_TARGETS) - na_count
+    print(f"\n  Score: {tp}/{scored} steps passed")
+    if na_count:
+        print(f"  ({na_count} display step(s) excluded — render-only device)")
+    if tp == scored:
+        print("  All applicable steps passed!")
     else:
-        print(f"  {active_failures} active step(s) failed")
+        print(f"  {failures} step(s) FAILED")
     print("=" * 60)
 
     try:
         os.unlink(path)
     except OSError:
         pass
-    return active_failures == 0
+    return tp == scored
 
 
 if __name__ == "__main__":
