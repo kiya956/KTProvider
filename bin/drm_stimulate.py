@@ -271,6 +271,26 @@ def main():
     elif session.get("type") == "wayland":
         if _try_pygame(session):
             return
+        # Wayland without pygame — try glxgears via Xwayland if available
+        x11_socks = sorted(glob.glob("/tmp/.X11-unix/X*"))
+        if x11_socks:
+            display_num = os.path.basename(x11_socks[0]).lstrip("X")
+            xwayland_session = dict(session)
+            xwayland_session["type"] = "x11"
+            xwayland_session["display"] = f":{display_num}"
+            # Find Xwayland auth
+            for pat in ["/run/user/*/.mutter-Xwaylandauth.*",
+                        "/run/user/*/gdm/Xauthority",
+                        "/home/*/.Xauthority"]:
+                matches = sorted(glob.glob(pat))
+                if matches and os.path.isfile(matches[0]):
+                    xwayland_session["xauthority"] = matches[0]
+                    break
+            if xwayland_session.get("xauthority"):
+                print("[stimulate] Wayland: trying glxgears via Xwayland",
+                      flush=True)
+                if _try_glxgears(xwayland_session):
+                    return
 
     # Last resort
     _try_drm_loop()

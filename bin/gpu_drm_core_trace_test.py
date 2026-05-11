@@ -36,21 +36,67 @@ import time
 # Device auto-detection
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _card_driver(card_path):
+    """Return the kernel driver name for a /dev/dri/cardN device."""
+    idx = card_path.replace("/dev/dri/card", "")
+    try:
+        return os.path.basename(os.readlink(f"/sys/class/drm/card{idx}/device/driver"))
+    except OSError:
+        return ""
+
+
+def _card_has_display(card_path):
+    """Return True if the card has at least one connector (display outputs)."""
+    idx = card_path.replace("/dev/dri/card", "")
+    connectors = glob.glob(f"/sys/class/drm/card{idx}-*/status")
+    return len(connectors) > 0
+
+
+# Proprietary nvidia-drm does not use standard DRM vblank/fence code paths,
+# so bpftrace probes for drm_handle_vblank / dma_fence_signal won't fire.
+_NVIDIA_PROPRIETARY_DRIVERS = ("nvidia-drm", "nvidia")
+
+
 def _find_drm_card(driver=None):
-    """Return the first /dev/dri/cardN, optionally matching a driver name."""
-    for card in sorted(glob.glob("/dev/dri/card[0-9]*")):
-        if not os.path.exists(card):
-            continue
-        if driver is None:
-            return card
-        idx = card.replace("/dev/dri/card", "")
-        try:
-            drv = os.path.basename(os.readlink(f"/sys/class/drm/card{idx}/device/driver"))
-            if driver in drv:
+    """Return the best /dev/dri/cardN for testing.
+
+    Selection order:
+      1. If *driver* is given, return the first card matching that driver.
+      2. Prefer a card that has display connectors (CRTCs) over render-only.
+      3. Among display-capable cards, prefer open-source drivers over
+         nvidia proprietary (whose vblank/fence paths are opaque).
+      4. Fall back to the first available card.
+    """
+    cards = sorted(glob.glob("/dev/dri/card[0-9]*"))
+    if not cards:
+        return "/dev/dri/card0"
+
+    if driver is not None:
+        for card in cards:
+            if driver in _card_driver(card):
                 return card
-        except OSError:
-            pass
-    return "/dev/dri/card0"
+        return cards[0]
+
+    display_open = []
+    display_nv = []
+    render_only = []
+
+    for card in cards:
+        drv = _card_driver(card)
+        has_disp = _card_has_display(card)
+        if has_disp and drv not in _NVIDIA_PROPRIETARY_DRIVERS:
+            display_open.append(card)
+        elif has_disp:
+            display_nv.append(card)
+        else:
+            render_only.append(card)
+
+    if display_open:
+        return display_open[0]
+    if display_nv:
+        return display_nv[0]
+    return cards[0]
+
 
 def _find_render_node(card_path):
     """Return the render node that pairs with the given card path."""
@@ -533,11 +579,11 @@ def step9_vblank(dev_path: str) -> bool:
     print(f"\n{BOLD}Step 9 — drm_handle_vblank(){RESET}")
 
     # Build ordered list of vblank probe candidates.
-    # drm_handle_vblank is the legacy path; Xe (and some modern drivers)
-    # use drm_crtc_send_vblank_event instead — the symbol may exist but
-    # never fire, so we try each in turn until one hits.
+    # drm_handle_vblank is the legacy path; modern drivers (amdgpu DC, xe)
+    # may use drm_crtc_handle_vblank or drm_crtc_send_vblank_event instead.
     candidates = []
-    for sym in ("drm_handle_vblank", "drm_crtc_send_vblank_event"):
+    for sym in ("drm_handle_vblank", "drm_crtc_handle_vblank",
+                "drm_crtc_send_vblank_event"):
         expr = find_probe(sym)
         if expr is not None:
             candidates.append(expr)
@@ -596,15 +642,19 @@ def step10_dma_fence(dev_path: str) -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _detect_display_env():
-    """Detect DISPLAY and XAUTHORITY for the active graphical session."""
+    """Detect DISPLAY and XAUTHORITY for the active graphical session.
+
+    Checks X11 first (including Xwayland auth), then Wayland.
+    """
     import glob as _glob
     env = {}
-    # X11
+    # X11 / Xwayland
     x11_socks = sorted(_glob.glob("/tmp/.X11-unix/X*"))
     if x11_socks:
         display_num = os.path.basename(x11_socks[0]).lstrip("X")
         env["DISPLAY"] = f":{display_num}"
         for pattern in ["/run/user/*/gdm/Xauthority",
+                        "/run/user/*/.mutter-Xwaylandauth.*",
                         "/home/*/.Xauthority", "/root/.Xauthority"]:
             matches = sorted(_glob.glob(pattern))
             if matches and os.path.isfile(matches[0]):
@@ -684,6 +734,10 @@ def main():
 
     # ── Choose which device to use ─────────────────────────────────────────
     dev = args.dev if os.path.exists(args.dev) else args.render
+    drv_name = _card_driver(dev)
+    is_nvidia = drv_name in _NVIDIA_PROPRIETARY_DRIVERS
+    if is_nvidia:
+        print(f"  Driver:   {drv_name} (proprietary — vblank/fence probes N/A)")
 
     # ── Steps 1–8: sequential (each may depend on previous state) ──────────
     fd = step1_drm_open(dev)
@@ -705,13 +759,25 @@ def main():
 
     # ── Steps 9–10: launch stimulator to generate GPU/display activity ──
     stim = _launch_stimulator()
-    if has_display:
+
+    if is_nvidia:
+        print(f"\n{BOLD}Step 9 — drm_handle_vblank(){RESET}")
+        info_("N/A — nvidia proprietary driver; vblank uses closed-source path")
+        record("drm_handle_vblank", None)
+    elif has_display:
         step9_vblank(dev)
     else:
         print(f"\n{BOLD}Step 9 — drm_handle_vblank(){RESET}")
         info_("N/A — device has 0 CRTCs (render-only), vblank not applicable")
         record("drm_handle_vblank", None)
-    step10_dma_fence(dev)
+
+    if is_nvidia:
+        print(f"\n{BOLD}Step 10 — dma_fence_signal() (GPU completion){RESET}")
+        info_("N/A — nvidia proprietary driver; fence uses closed-source path")
+        record("dma_fence_signal (GPU sync)", None)
+    else:
+        step10_dma_fence(dev)
+
     _stop_stimulator(stim)
 
     # ── Summary ───────────────────────────────────────────────────────────
@@ -731,7 +797,12 @@ def main():
 
     print(f"\n  Score: {passed}/{scored}")
     if na_count:
-        print(f"  ({na_count} step(s) excluded — render-only device, no display outputs)")
+        reasons = []
+        if not has_display:
+            reasons.append("render-only device, no display outputs")
+        if is_nvidia:
+            reasons.append("nvidia proprietary driver")
+        print(f"  ({na_count} step(s) excluded — {'; '.join(reasons) if reasons else 'N/A'})")
     if passed == scored:
         print(f"  {GREEN}{BOLD}All applicable steps passed!{RESET}")
     else:
