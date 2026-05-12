@@ -1,0 +1,63 @@
+unit: category
+id: kprovider/sound
+_name: Sound Subsystem
+
+unit: category
+id: kprovider/sound/core
+_name: ALSA Core
+
+unit: category
+id: kprovider/sound/hda
+_name: HDA (HD-Audio)
+
+unit: job
+id: kprovider/sound/overall
+_summary: ALSA Sound subsystem overall workflow trace test
+_description:
+ Traces the full ALSA sound subsystem workflow using bpftrace:
+ card registration, PCM open/prepare/trigger, and control path.
+ Requires any sound card present.
+plugin: shell
+category_id: kprovider/sound
+user: root
+estimated_duration: 120.0
+command:
+ command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
+ command -v aplay >/dev/null 2>&1 || { echo "aplay not found — install with: sudo apt install alsa-utils"; exit 1; }
+ ls /dev/snd/pcmC*D*p >/dev/null 2>&1 || { echo "No PCM playback device found — skipping"; exit 1; }
+ sound_trace_test.py
+
+unit: job
+id: kprovider/sound/core/pcm-lifecycle
+_summary: ALSA core PCM lifecycle workflow trace test
+_description:
+ Traces the PCM playback lifecycle through the ALSA core:
+ snd_pcm_open_substream → snd_pcm_hw_params → snd_pcm_prepare
+ → __snd_pcm_lib_xfer → snd_pcm_do_start → snd_pcm_update_hw_ptr.
+ Requires any sound card with a PCM playback device.
+plugin: shell
+category_id: kprovider/sound/core
+user: root
+estimated_duration: 120.0
+command:
+ command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
+ command -v aplay >/dev/null 2>&1 || { echo "aplay not found — install with: sudo apt install alsa-utils"; exit 1; }
+ ls /dev/snd/pcmC*D*p >/dev/null 2>&1 || { echo "No PCM playback device found — skipping"; exit 1; }
+ sound_core_trace_test.py
+
+unit: job
+id: kprovider/sound/hda/stream
+_summary: HDA (HD-Audio) codec and stream workflow trace test
+_description:
+ Traces the HDA codec initialization and PCM stream setup:
+ snd_hda_codec_setup_stream and codec probe lifecycle.
+ Requires HDA sound card (snd_hda_intel module loaded).
+plugin: shell
+category_id: kprovider/sound/hda
+user: root
+estimated_duration: 120.0
+command:
+ command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
+ command -v aplay >/dev/null 2>&1 || { echo "aplay not found — install with: sudo apt install alsa-utils"; exit 1; }
+ grep -q '^snd_hda' /proc/modules || { echo "snd_hda module not loaded — skipping"; exit 1; }
+ sound_hda_trace_test.py

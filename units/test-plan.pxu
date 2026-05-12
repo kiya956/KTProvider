@@ -12,6 +12,9 @@ include:
  kprovider/gpu/drm/bridge
  kprovider/gpu/drm/arm
  kprovider/gpu/drm/nvidia-drm
+ kprovider/sound/overall
+ kprovider/sound/core/pcm-lifecycle
+ kprovider/sound/hda/stream
 
 unit: test plan
 id: kprovider-gpu-drm
@@ -28,3 +31,12 @@ include:
  kprovider/gpu/drm/bridge
  kprovider/gpu/drm/arm
  kprovider/gpu/drm/nvidia-drm
+
+unit: test plan
+id: kprovider-sound
+_name: kprovider Sound Subsystem
+_description: Sound subsystem bpftrace workflow tests (ALSA core + HDA)
+include:
+ kprovider/sound/overall
+ kprovider/sound/core/pcm-lifecycle
+ kprovider/sound/hda/stream
