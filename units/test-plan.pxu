@@ -4,6 +4,7 @@ _name: kprovider Full Test Plan
 _description: All jobs from the kprovider
 include:
  kprovider/example-job
+ kprovider/virtio/core
  kprovider/gpu/drm/core
  kprovider/gpu/drm/i915
  kprovider/gpu/drm/amd
@@ -12,6 +13,14 @@ include:
  kprovider/gpu/drm/bridge
  kprovider/gpu/drm/arm
  kprovider/gpu/drm/nvidia-drm
+ kprovider/gpu/drm/ttm
+
+unit: test plan
+id: kprovider-virtio
+_name: kprovider Virtio Subsystem
+_description: Virtio subsystem bpftrace workflow tests
+include:
+ kprovider/virtio/core
 
 unit: test plan
 id: kprovider-gpu-drm
@@ -28,3 +37,4 @@ include:
  kprovider/gpu/drm/bridge
  kprovider/gpu/drm/arm
  kprovider/gpu/drm/nvidia-drm
+ kprovider/gpu/drm/ttm

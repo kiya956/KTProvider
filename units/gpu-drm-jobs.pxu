@@ -160,3 +160,19 @@ requires: drm_gpu_modules.module == 'nvidia_drm'
 command:
  command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
  gpu_drm_nvidia_drm_trace_test.py
+
+id: kprovider/gpu/drm/ttm
+_summary: TTM GPU memory manager bpftrace workflow verification
+_description:
+ Traces the TTM (Translation Table Maps) buffer object lifecycle using bpftrace
+ kprobe probes. Covers: ttm_bo_init_reserved, ttm_bo_validate, ttm_pool_alloc,
+ ttm_bo_move_to_lru_tail, and ttm_bo_put. Works on any system with a DRM
+ device; uses vkms as a trigger if no GPU driver is loaded.
+plugin: shell
+category_id: kprovider/gpu/drm
+user: root
+estimated_duration: 120.0
+command:
+ command -v bpftrace >/dev/null 2>&1 || { echo "bpftrace not found — install with: sudo apt install bpftrace"; exit 1; }
+ ls /dev/dri/ >/dev/null 2>&1 || { echo "No DRM device found — skipping"; exit 1; }
+ gpu_drm_ttm_trace_test.py
